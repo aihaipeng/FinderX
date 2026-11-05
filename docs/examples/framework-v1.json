@@ -1,0 +1,369 @@
+{
+  "schemaVersion": 1,
+  "actions": [
+    {
+      "id": "open.sublime",
+      "title": "Sublime Text",
+      "icon": "doc.text",
+      "when": {
+        "surfaces": [
+          "items",
+          "container",
+          "sidebar"
+        ],
+        "kinds": [
+          "file",
+          "directory"
+        ]
+      },
+      "batch": "all",
+      "execution": {
+        "type": "command",
+        "executable": "/bin/zsh",
+        "arguments": [
+          "{home}/Library/Containers/com.finderx.app.finder/Data/Library/Application Support/FinderX/Scripts/open-application.zsh",
+          "Sublime Text",
+          "{paths}"
+        ],
+        "requirements": {
+          "paths": [
+            "{home}/Library/Containers/com.finderx.app.finder/Data/Library/Application Support/FinderX/Scripts/open-application.zsh"
+          ],
+          "applications": [
+            "Sublime Text"
+          ]
+        }
+      }
+    },
+    {
+      "id": "open.typora",
+      "title": "Typora",
+      "icon": "doc.richtext",
+      "when": {
+        "surfaces": [
+          "items"
+        ],
+        "kinds": [
+          "file"
+        ],
+        "extensions": [
+          "md",
+          "markdown"
+        ]
+      },
+      "batch": "all",
+      "execution": {
+        "type": "command",
+        "executable": "/bin/zsh",
+        "arguments": [
+          "{home}/Library/Containers/com.finderx.app.finder/Data/Library/Application Support/FinderX/Scripts/open-application.zsh",
+          "Typora",
+          "{paths}"
+        ],
+        "requirements": {
+          "paths": [
+            "{home}/Library/Containers/com.finderx.app.finder/Data/Library/Application Support/FinderX/Scripts/open-application.zsh"
+          ],
+          "applications": [
+            "Typora"
+          ]
+        }
+      }
+    },
+    {
+      "id": "open.terminal",
+      "title": "在终端中打开",
+      "icon": "terminal",
+      "when": {
+        "surfaces": [
+          "items",
+          "container",
+          "sidebar"
+        ],
+        "kinds": [
+          "directory"
+        ]
+      },
+      "batch": "all",
+      "execution": {
+        "type": "command",
+        "executable": "/bin/zsh",
+        "arguments": [
+          "{home}/Library/Containers/com.finderx.app.finder/Data/Library/Application Support/FinderX/Scripts/terminal.zsh",
+          "{paths}"
+        ],
+        "requirements": {
+          "paths": [
+            "{home}/Library/Containers/com.finderx.app.finder/Data/Library/Application Support/FinderX/Scripts/terminal.zsh"
+          ],
+          "applications": [
+            "Terminal"
+          ]
+        }
+      }
+    },
+    {
+      "id": "clipboard.paths",
+      "title": "复制路径",
+      "icon": "doc.on.doc",
+      "when": {
+        "surfaces": [
+          "items",
+          "container",
+          "sidebar"
+        ],
+        "kinds": [
+          "file",
+          "directory",
+          "unknown"
+        ]
+      },
+      "batch": "all",
+      "execution": {
+        "type": "command",
+        "executable": "/bin/zsh",
+        "arguments": [
+          "{home}/Library/Containers/com.finderx.app.finder/Data/Library/Application Support/FinderX/Scripts/copy-paths.zsh",
+          "{paths}"
+        ],
+        "requirements": {
+          "paths": [
+            "{home}/Library/Containers/com.finderx.app.finder/Data/Library/Application Support/FinderX/Scripts/copy-paths.zsh"
+          ]
+        }
+      }
+    },
+    {
+      "id": "send.localsend",
+      "title": "LocalSend",
+      "icon": "antenna.radiowaves.left.and.right",
+      "when": {
+        "surfaces": [
+          "items",
+          "container",
+          "sidebar"
+        ],
+        "kinds": [
+          "file",
+          "directory"
+        ]
+      },
+      "execution": {
+        "type": "command",
+        "executable": "/bin/zsh",
+        "arguments": [
+          "{home}/Library/Containers/com.finderx.app.finder/Data/Library/Application Support/FinderX/Scripts/localsend.zsh",
+          "{paths}"
+        ],
+        "requirements": {
+          "paths": [
+            "{home}/Library/Containers/com.finderx.app.finder/Data/Library/Application Support/FinderX/Scripts/localsend.zsh"
+          ],
+          "applications": [
+            "LocalSend"
+          ]
+        }
+      }
+    },
+    {
+      "id": "move.downloads",
+      "title": "下载",
+      "icon": "folder",
+      "when": {
+        "surfaces": [
+          "items",
+          "sidebar"
+        ],
+        "kinds": [
+          "file",
+          "directory"
+        ]
+      },
+      "batch": "each",
+      "onError": "stop",
+      "execution": {
+        "type": "command",
+        "executable": "/bin/zsh",
+        "arguments": [
+          "{home}/Library/Containers/com.finderx.app.finder/Data/Library/Application Support/FinderX/Scripts/move.zsh",
+          "{home}/Downloads",
+          "{paths}"
+        ],
+        "requirements": {
+          "paths": [
+            "{home}/Library/Containers/com.finderx.app.finder/Data/Library/Application Support/FinderX/Scripts/move.zsh"
+          ]
+        }
+      }
+    },
+    {
+      "id": "shortcut.desktop",
+      "title": "桌面快捷方式",
+      "icon": "desktopcomputer",
+      "when": {
+        "surfaces": [
+          "items",
+          "sidebar"
+        ],
+        "kinds": [
+          "file",
+          "directory"
+        ]
+      },
+      "batch": "each",
+      "execution": {
+        "type": "command",
+        "executable": "/bin/zsh",
+        "arguments": [
+          "{home}/Library/Containers/com.finderx.app.finder/Data/Library/Application Support/FinderX/Scripts/symlink.zsh",
+          "{home}/Desktop",
+          "{paths}"
+        ],
+        "requirements": {
+          "paths": [
+            "{home}/Library/Containers/com.finderx.app.finder/Data/Library/Application Support/FinderX/Scripts/symlink.zsh"
+          ]
+        }
+      }
+    },
+    {
+      "id": "dock.pin",
+      "title": "固定到程序坞",
+      "icon": "pin",
+      "when": {
+        "surfaces": [
+          "items",
+          "container",
+          "sidebar"
+        ],
+        "kinds": [
+          "directory"
+        ]
+      },
+      "batch": "all",
+      "execution": {
+        "type": "command",
+        "executable": "/bin/zsh",
+        "arguments": [
+          "{home}/Library/Containers/com.finderx.app.finder/Data/Library/Application Support/FinderX/Scripts/pin-dock.zsh",
+          "{paths}"
+        ],
+        "requirements": {
+          "paths": [
+            "{home}/Library/Containers/com.finderx.app.finder/Data/Library/Application Support/FinderX/Scripts/pin-dock.zsh"
+          ]
+        }
+      }
+    },
+    {
+      "id": "script.custom",
+      "title": "自定义脚本示例",
+      "enabled": false,
+      "when": {
+        "surfaces": [
+          "items",
+          "container",
+          "sidebar"
+        ],
+        "kinds": [
+          "file",
+          "directory"
+        ]
+      },
+      "batch": "all",
+      "execution": {
+        "type": "command",
+        "executable": "/bin/zsh",
+        "arguments": [
+          "{home}/.config/finderx/scripts/my-action.zsh",
+          "{paths}"
+        ],
+        "requirements": {
+          "paths": [
+            "{home}/.config/finderx/scripts/my-action.zsh"
+          ]
+        }
+      }
+    }
+  ],
+  "menu": [
+    {
+      "type": "group",
+      "id": "menu.finderx",
+      "title": "FinderX",
+      "icon": "contextualmenu.and.cursorarrow",
+      "children": [
+        {
+          "type": "group",
+          "id": "menu.open-with",
+          "title": "打开方式",
+          "children": [
+            {
+              "type": "action",
+              "id": "menu.sublime",
+              "actionID": "open.sublime"
+            },
+            {
+              "type": "action",
+              "id": "menu.typora",
+              "actionID": "open.typora"
+            }
+          ]
+        },
+        {
+          "type": "action",
+          "id": "menu.terminal",
+          "actionID": "open.terminal"
+        },
+        {
+          "type": "action",
+          "id": "menu.copy-paths",
+          "actionID": "clipboard.paths"
+        },
+        {
+          "type": "action",
+          "id": "menu.pin",
+          "actionID": "dock.pin"
+        },
+        {
+          "type": "separator",
+          "id": "menu.separator.files"
+        },
+        {
+          "type": "group",
+          "id": "menu.move",
+          "title": "移动到",
+          "children": [
+            {
+              "type": "action",
+              "id": "menu.move.downloads",
+              "actionID": "move.downloads"
+            }
+          ]
+        },
+        {
+          "type": "group",
+          "id": "menu.send",
+          "title": "发送到",
+          "children": [
+            {
+              "type": "action",
+              "id": "menu.localsend",
+              "actionID": "send.localsend"
+            },
+            {
+              "type": "action",
+              "id": "menu.shortcut",
+              "actionID": "shortcut.desktop"
+            }
+          ]
+        },
+        {
+          "type": "action",
+          "id": "menu.script",
+          "actionID": "script.custom"
+        }
+      ]
+    }
+  ]
+}

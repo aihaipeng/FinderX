@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>zh_CN</string>
+	<key>CFBundleDisplayName</key>
+	<string>FinderX</string>
+	<key>CFBundleExecutable</key>
+	<string>FinderX</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.finderx.app</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>FinderX</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.2.1</string>
+	<key>CFBundleSupportedPlatforms</key>
+	<array>
+		<string>MacOSX</string>
+	</array>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.finderx.app</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>finderx</string>
+			</array>
+		</dict>
+	</array>
+	<key>CFBundleVersion</key>
+	<string>3</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>13.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>FinderX 需要访问桌面，以便把文件移动到桌面或在桌面创建快捷方式。</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>FinderX 需要访问文稿文件夹，以便把文件移动到文稿。</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>FinderX 需要访问下载文件夹，以便把文件移动到下载。</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright © 2026 FinderX.</string>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+	<key>NSRemovableVolumesUsageDescription</key>
+	<string>FinderX 需要访问外接磁盘，以便把文件移动到外接磁盘。</string>
+</dict>
+</plist>

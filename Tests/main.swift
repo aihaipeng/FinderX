@@ -1,0 +1,301 @@
+import Foundation
+import Darwin
+import Cocoa
+
+if let code = NativeCommands.handle(Array(CommandLine.arguments.dropFirst())) { exit(code) }
+setbuf(stdout, nil)
+
+struct TestFailure: Error, CustomStringConvertible { let description: String }
+func expect(_ condition: @autoclosure () throws -> Bool, _ message: String) throws {
+    if try !condition() { throw TestFailure(description: message) }
+}
+func rejects(_ block: () throws -> Void) throws {
+    do { try block() } catch { return }
+    throw TestFailure(description: "Expected operation to be rejected")
+}
+let fm = FileManager.default
+let root = fm.temporaryDirectory.appendingPathComponent("FinderXTests-" + UUID().uuidString)
+try fm.createDirectory(at: root, withIntermediateDirectories: true)
+defer { try? fm.removeItem(at: root) }
+let home = root.appendingPathComponent("home")
+try fm.createDirectory(at: home, withIntermediateDirectories: true)
+let resources = URL(fileURLWithPath: CommandLine.arguments[1]).appendingPathComponent("Resources")
+let libraryDirectory = home.appendingPathComponent("Library/Containers/com.finderx.app.finder/Data/Library/Application Support/FinderX")
+let library = ScriptLibrary(directory: libraryDirectory)
+try library.install(from: resources)
+let folder = home.appendingPathComponent("文件夹 with spaces")
+try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+let file = folder.appendingPathComponent("计划 'quoted' $(date) {literal}\nline.md")
+try Data("original".utf8).write(to: file)
+let builder = PlanBuilder(home: home.path)
+let context = ActionContext.capture(surface: .items, selection: [file], container: folder)
+let defaults = DefaultConfiguration.make(home: home.path)
+let processRunner = ProcessRunner()
+var passed = 0
+var failed = 0
+func test(_ name: String, _ body: () throws -> Void) {
+    do { try body(); passed += 1; print("PASS \(name)") }
+    catch { failed += 1; print("FAIL \(name): \(error)") }
+}
+func command(_ executable: String, _ arguments: [String], input: Data = Data(), timeout: Double = 3) -> CommandJob {
+    CommandJob(executable: executable, arguments: arguments, workingDirectory: home.path,
+        environment: ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": home.path, "LANG": "en_US.UTF-8", "FINDERX_EXECUTABLE": Bundle.main.executableURL!.path],
+        input: input, timeout: timeout, successExitCodes: [0])
+}
+func runScript(_ name: String, _ arguments: [String]) -> JobResult {
+    processRunner.run(command("/bin/zsh", [library.scripts.appendingPathComponent(name + ".zsh").path] + arguments))
+}
+
+test("default configuration round trip and six script presets") {
+    let decoded = try ConfigurationCodec.decode(ConfigurationCodec.encode(defaults))
+    try expect(decoded.actions.filter { $0.execution.type == .command }.count == 8, "six actions plus three destination scripts expected")
+    try expect(decoded.actions.filter { $0.execution.type == .builtin }.allSatisfy { $0.id == "app.add-destination" }, "file features must run scripts")
+    for action in decoded.actions where action.execution.type == .command { try builder.checkDependencies(action.execution) }
+}
+test("strict fields, references, versions and templates") {
+    _ = try ConfigurationCodec.decode(Data(contentsOf: resources.deletingLastPathComponent().appendingPathComponent("docs/examples/framework-v1.json")))
+    var object = try JSONSerialization.jsonObject(with: ConfigurationCodec.encode(defaults)) as! [String: Any]
+    object["typo"] = true
+    try rejects { _ = try ConfigurationCodec.decode(JSONSerialization.data(withJSONObject: object)) }
+    var config = defaults
+    config.schemaVersion = 2
+    try rejects { try ConfigurationCodec.validate(config) }
+    config = defaults
+    config.actions[0].execution.arguments = ["--files={paths}"]
+    try rejects { try ConfigurationCodec.validate(config) }
+    config.actions[0].execution.arguments = ["{path}"]
+    try rejects { try ConfigurationCodec.validate(config) }
+    config.actions[0].batch = .each
+    try ConfigurationCodec.validate(config)
+    config.menu = [MenuDefinition(type: .action, id: "broken", actionID: "missing")]
+    try rejects { try ConfigurationCodec.validate(config) }
+}
+test("container context ignores stale selection; mixed selection not filtered") {
+    let container = ActionContext.capture(surface: .container, selection: [file], container: folder)
+    try expect(container.targets.map(\.path) == [folder.path], "stale selection leaked")
+    let mixed = ActionContext.capture(surface: .items, selection: [file, folder, file], container: folder)
+    try expect(mixed.targets.count == 2, "paths should be deduplicated")
+    try expect(!ConditionMatcher.matches(defaults.actions[0], context: mixed), "terminal must reject mixed selection")
+    try expect(ConditionMatcher.matches(defaults.actions[1], context: mixed), "copy paths should accept mixed selection")
+}
+test("literal arguments, Unicode, quotes and braces") {
+    let action = ActionDefinition(id: "test", title: "test", when: MatchCondition(surfaces: [.items], kinds: [.file]),
+        execution: ExecutionDefinition(type: .command, executable: "/usr/bin/printf", arguments: ["%s", "{paths}"]))
+    let plan = try builder.build(action: action, context: context)
+    guard case .command(let job) = plan.jobs[0].payload else { throw TestFailure(description: "expected command") }
+    let result = processRunner.run(job)
+    try expect(result.status == .succeeded && result.stdout == file.path, "path was split, interpreted or escaped twice")
+    try expect(try Template.expand("{{path}}", values: [:]) == "{path}", "brace escaping failed")
+    try expect(try Template.expand(Template.literal("{home}"), values: ["home":"wrong"]) == "{home}", "literal interpreted")
+}
+test("menu pruning and unavailable dependencies") {
+    var config = defaults
+    for index in config.actions.indices { config.actions[index].enabled = false }
+    let snapshot = try ConfigurationCodec.snapshot(config)
+    try expect(MenuBuilder.build(snapshot: snapshot, context: context).isEmpty, "empty groups should disappear")
+    let model = MenuBuilder.build(snapshot: try ConfigurationCodec.snapshot(defaults), context: context, availability: ["send.localsend": "missing"])
+    func flatten(_ nodes: [MenuModel]) -> [MenuModel] { nodes.flatMap { [$0] + flatten($0.children) } }
+    try expect(flatten(model).first { $0.actionID == "send.localsend" }?.unavailableReason == "missing", "dependency state lost")
+}
+test("legacy migration backup, stable IDs and last-good recovery") {
+    let configURL = root.appendingPathComponent("legacy/config.json")
+    try fm.createDirectory(at: configURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+    let old = try JSONSerialization.data(withJSONObject: ["destinations": [["name":"目标", "path":folder.path]]])
+    try old.write(to: configURL)
+    let repo = ConfigurationRepository(url: configURL, home: home.path, writable: true)
+    let first = try repo.load()
+    let second = try repo.load()
+    try expect(first.revision == second.revision, "migration repeated")
+    try expect(try Data(contentsOf: configURL.appendingPathExtension("legacy-backup")) == old, "backup changed")
+    try Data("broken json".utf8).write(to: configURL)
+    let recovered = try repo.load()
+    try expect(recovered.revision == first.revision && repo.lastError != nil, "in-memory recovery failed")
+    let restarted = ConfigurationRepository(url: configURL, home: home.path, writable: false)
+    try expect(try restarted.load().revision == first.revision && restarted.lastError != nil, "disk recovery failed")
+    try expect(try String(contentsOf: configURL, encoding: .utf8) == "broken json", "bad config overwritten")
+    try fm.removeItem(at: configURL)
+    let missing = ConfigurationRepository(url: configURL, home: home.path, writable: true)
+    try expect(try missing.load().revision == first.revision && missing.lastError != nil, "deleted config lost saved actions")
+    try expect(!fm.fileExists(atPath: configURL.path), "missing config replaced silently")
+}
+test("request file handoff, consume once, expiration and symlink rejection") {
+    let queue = InvocationTransport(directory: root.appendingPathComponent("transport"))
+    let request = Invocation(actionID: "clipboard.paths", revision: try ConfigurationCodec.snapshot(defaults).revision, context: context)
+    let url = try queue.enqueue(request)
+    let decoded = try queue.take(url)
+    try expect(decoded?.requestID == request.requestID && decoded?.context == request.context, "snapshot changed")
+    try expect(try queue.take(url) == nil, "request replayed")
+    let next = Invocation(actionID: "clipboard.paths", revision: "r", context: context)
+    let nextURL = try queue.enqueue(next)
+    let requestFile = root.appendingPathComponent("transport/Requests/" + next.requestID.uuidString + ".json")
+    try fm.removeItem(at: requestFile)
+    try fm.createSymbolicLink(at: requestFile, withDestinationURL: file)
+    try rejects { _ = try queue.take(nextURL) }
+    var json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as! [String: Any]
+    json["createdAt"] = Date(timeIntervalSinceNow: -120).timeIntervalSinceReferenceDate
+    let expiredFile = root.appendingPathComponent("transport/Requests/" + request.requestID.uuidString + ".json")
+    try JSONSerialization.data(withJSONObject: json).write(to: expiredFile)
+    try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: expiredFile.path)
+    try rejects { _ = try queue.take(url) }
+}
+test("menu action handoff stays in the background") {
+    let options = BackgroundLaunch.configuration()
+    try expect(!options.activates && !options.promptsUserIfNeeded && !options.addsToRecentItems, "action launch may steal focus or display unrelated UI")
+}
+test("Finder reconstructed menu items resolve using tags without representedObject") {
+    let bindings = MenuBindings()
+    let first = NSMenuItem(title: "复制路径", action: nil, keyEquivalent: "")
+    bindings.bind(first, actionID: "clipboard.paths", revision: "original", context: context)
+    let secondContext = ActionContext.capture(surface: .container, selection: [], container: folder)
+    let second = NSMenuItem(title: "复制路径", action: nil, keyEquivalent: "")
+    bindings.bind(second, actionID: "clipboard.paths", revision: "newer", context: secondContext)
+    let callback = NSMenuItem(title: first.title, action: nil, keyEquivalent: "")
+    callback.tag = first.tag
+    try expect(callback.representedObject == nil, "callback must not carry custom objects")
+    try expect(bindings.resolve(callback)?.context == context, "older menu lost its original selection")
+    try expect(bindings.resolve(callback)?.revision == "original", "new menu replaced old revision")
+    try expect(bindings.resolve(second)?.context == secondContext && first.tag != second.tag, "menu identity collision")
+    bindings.discardExpired(now: Date(timeIntervalSinceNow: 601))
+    try expect(bindings.resolve(callback) == nil, "expired snapshots retained")
+}
+test("bounded output drains stdout and stderr without deadlock") {
+    let script = "for ((i=0;i<10000;i++)); do printf '0123456789abcdef'; printf 'fedcba9876543210' >&2; done"
+    let result = processRunner.run(command("/bin/zsh", ["-c", script]))
+    try expect(result.status == .succeeded, "large-output child failed")
+    try expect(result.stdout.utf8.count == 65536 && result.stderr.utf8.count == 65536, "capture limit not honored")
+    try expect(result.stdoutTruncated && result.stderrTruncated, "truncation flags missing")
+}
+test("stdin EOF and early exit") {
+    let input = Data(repeating: 120, count: 300000)
+    let cat = processRunner.run(command("/bin/cat", [], input: input))
+    try expect(cat.status == .succeeded && cat.stdoutTruncated, "stdin or EOF stalled")
+    let early = processRunner.run(command("/usr/bin/true", [], input: input))
+    try expect(early.status == .succeeded, "closed stdin killed host")
+}
+test("timeout and cancellation terminate script descendants") {
+    let pidFile = root.appendingPathComponent("child.pid")
+    let script = "/bin/sleep 30 &\nprintf '%s' $! > \"$1\"\nwait"
+    let result = processRunner.run(command("/bin/zsh", ["-c", script, "test", pidFile.path], timeout: 0.15))
+    try expect(result.status == .timedOut, "timeout not reported")
+    let pid = Int32(try String(contentsOf: pidFile, encoding: .utf8))!
+    Thread.sleep(forTimeInterval: 0.05)
+    try expect(kill(pid, 0) != 0, "descendant survived timeout")
+    let token = CancellationToken()
+    DispatchQueue.global().asyncAfter(deadline: .now() + 0.1) { token.cancel() }
+    let cancelled = processRunner.run(command("/bin/sleep", ["30"]), cancellation: token)
+    try expect(cancelled.status == .cancelled, "cancellation not reported")
+}
+test("move script collision, no-op, descendant check and literal filenames") {
+    let destination = root.appendingPathComponent("move-target")
+    try fm.createDirectory(at: destination, withIntermediateDirectories: true)
+    let occupied = destination.appendingPathComponent(file.lastPathComponent)
+    try Data("occupied".utf8).write(to: occupied)
+    let result = runScript("move", [destination.path, file.path])
+    try expect(result.status == .succeeded, result.message ?? result.stderr)
+    let moved = destination.appendingPathComponent(file.lastPathComponent + " 2")
+    try expect(fm.fileExists(atPath: moved.path) && !fm.fileExists(atPath: file.path), "source not moved to suffix")
+    try expect(try String(contentsOf: occupied, encoding: .utf8) == "occupied", "existing file overwritten")
+    let noop = runScript("move", [destination.path, moved.path])
+    try expect(noop.status == .succeeded && noop.stdout.contains("已跳过"), "same-directory move not skipped")
+    let child = folder.appendingPathComponent("child")
+    try fm.createDirectory(at: child, withIntermediateDirectories: true)
+    let invalid = runScript("move", [child.path, folder.path])
+    try expect(invalid.status == .failed && fm.fileExists(atPath: folder.path), "descendant move allowed")
+    try Data("original".utf8).write(to: file)
+}
+test("symlink preset preserves occupied directories and dangling links") {
+    let destination = root.appendingPathComponent("links")
+    try fm.createDirectory(at: destination, withIntermediateDirectories: true)
+    let occupied = destination.appendingPathComponent(file.lastPathComponent)
+    try fm.createDirectory(at: occupied, withIntermediateDirectories: false)
+    try fm.createSymbolicLink(atPath: occupied.path + " 2", withDestinationPath: "/nonexistent/finderx-test")
+    let result = runScript("symlink", [destination.path, file.path])
+    try expect(result.status == .succeeded, result.message ?? result.stderr)
+    try expect(try fm.destinationOfSymbolicLink(atPath: occupied.path + " 3") == file.path, "suffix link not created")
+    try expect(try fm.contentsOfDirectory(atPath: occupied.path).isEmpty, "link incorrectly nested into existing directory")
+    try rejects { try NativeCommands.moveNoReplace(from: file, to: occupied) }
+    try expect(fm.fileExists(atPath: file.path), "exclusive move damaged source")
+    let dangling = ActionTarget.read(occupied.path + " 2")
+    try expect(dangling.kind == .file, "dangling symlink should remain an actionable file")
+}
+test("script library preserves user edits across installs") {
+    let script = library.scripts.appendingPathComponent("terminal.zsh")
+    try Data("# user edit\n".utf8).write(to: script)
+    try library.install(from: resources)
+    try expect(try String(contentsOf: script, encoding: .utf8) == "# user edit\n", "user script overwritten")
+}
+test("FinderX imports legacy configuration and preserves user scripts once") {
+    let old = root.appendingPathComponent("legacy-brand")
+    let new = root.appendingPathComponent("new-brand")
+    try fm.createDirectory(at: old.appendingPathComponent("Scripts/nested"), withIntermediateDirectories: true)
+    let body = "#!/bin/zsh\nprintf '%s' \"$SUPERRIGHT_EXECUTABLE\"\n# user edit\n"
+    try Data(body.utf8).write(to: old.appendingPathComponent("Scripts/nested/custom.zsh"))
+    var config = DefaultConfiguration.make(home: home.path)
+    config.menu[0].id = "menu.superright"
+    config.menu[0].title = "SuperRight"
+    config.actions[0].execution.arguments = [old.appendingPathComponent("Scripts/nested/custom.zsh").path, "{paths}"]
+    config.actions[0].execution.requirements = Requirements(paths: ["{home}/Library/Containers/com.superright.app.finder/Data/Library/Application Support/SuperRight/Scripts/nested/custom.zsh"])
+    let original = try ConfigurationCodec.encode(config)
+    try original.write(to: old.appendingPathComponent("config.json"))
+    let migratedLibrary = ScriptLibrary(directory: new)
+    try migratedLibrary.migrateLegacy(from: old)
+    let result = try ConfigurationCodec.decode(Data(contentsOf: new.appendingPathComponent("config.json")))
+    try expect(result.menu[0].id == "menu.finderx" && result.menu[0].title == "FinderX", "root menu not renamed")
+    try expect(result.actions[0].execution.arguments?.first == new.appendingPathComponent("Scripts/nested/custom.zsh").path, "absolute script path not migrated")
+    try expect(result.actions[0].execution.requirements?.paths?.first == DefaultConfiguration.scriptDirectory + "/nested/custom.zsh", "template script path not migrated")
+    try expect(try String(contentsOf: new.appendingPathComponent("Scripts/nested/custom.zsh"), encoding: .utf8) == body, "user script changed")
+    try expect(try Data(contentsOf: new.appendingPathComponent("config.superright-backup.json")) == original, "backup changed")
+    try expect(try Data(contentsOf: old.appendingPathComponent("config.json")) == original, "old config modified")
+    let saved = try Data(contentsOf: new.appendingPathComponent("config.json"))
+    try Data("invalid".utf8).write(to: old.appendingPathComponent("config.json"))
+    try migratedLibrary.migrateLegacy(from: old)
+    try expect(try Data(contentsOf: new.appendingPathComponent("config.json")) == saved, "migration overwrote existing FinderX config")
+}
+test("custom scripts are checked without running, and syntax failures are rejected") {
+    let marker = root.appendingPathComponent("must-not-run")
+    let script = try library.create(id: "custom", body: "#!/bin/zsh\n/usr/bin/touch " + ScriptLibrary.shellLiteral(marker.path) + "\n")
+    try expect(fm.fileExists(atPath: script.path) && !fm.fileExists(atPath: marker.path), "saving a script executed it")
+    try rejects { _ = try library.create(id: "invalid", body: "if then\n") }
+    try expect(!fm.fileExists(atPath: library.scripts.appendingPathComponent("invalid.zsh").path), "invalid script was kept")
+    let literal = "/Applications/a 'quoted' $(date) app.app"
+    let result = processRunner.run(command("/bin/zsh", ["-c", "printf '%s' " + ScriptLibrary.shellLiteral(literal)]))
+    try expect(result.stdout == literal, "generated script interpreted app path")
+}
+test("Dock script escapes Unicode URLs and XML without modifying Dock") {
+    let source = try String(contentsOf: resources.appendingPathComponent("Scripts/pin-dock.zsh"), encoding: .utf8)
+    let definitions = String(source.components(separatedBy: "for selected_path in")[0])
+    let result = processRunner.run(command("/bin/zsh", ["-c", definitions + "\nfile_url \"$1\"; printf '%s\\n' \"$REPLY\"; xml_escape '<&>'; printf '%s' \"$REPLY\"", "test", "/测试 &.txt"]))
+    try expect(result.status == .succeeded, result.stderr)
+    try expect(result.stdout.contains("file:///%E6%B5%8B%E8%AF%95%20%26.txt"), "bad file URL: " + result.stdout)
+    try expect(result.stdout.hasSuffix("&lt;&amp;&gt;"), "bad XML escaping: " + result.stdout)
+}
+test("partial failure and stop versus continue") {
+    let registry = BuiltinRegistry()
+    let dispatcher = ActionDispatcher(repository: ConfigurationRepository(url: root.appendingPathComponent("unused"), home: home.path, writable: false), builder: builder, builtins: registry)
+    let ok = ExecutionJob(targets: [], payload: .command(command("/usr/bin/true", [])))
+    let bad = ExecutionJob(targets: [], payload: .command(command("/usr/bin/false", [])))
+    let stop = dispatcher.execute(ExecutionPlan(requestID: UUID(), actionID: "test", title: "test", onError: .stop, jobs: [ok,bad,ok]))
+    let continued = dispatcher.execute(ExecutionPlan(requestID: UUID(), actionID: "test", title: "test", onError: .continue, jobs: [ok,bad,ok]))
+    try expect(stop.status == .partiallySucceeded && stop.jobs.count == 2, "stop policy failed")
+    try expect(continued.status == .partiallySucceeded && continued.jobs.count == 3, "continue policy failed")
+}
+test("stale configuration rejected and duplicate invocation executes once") {
+    let repo = ConfigurationRepository(url: root.appendingPathComponent("dispatch/config.json"), home: home.path, writable: true)
+    let action = ActionDefinition(id: "test", title: "test", when: MatchCondition(surfaces: [.items], kinds: [.file]), execution: ExecutionDefinition(type: .command, executable: "/usr/bin/true", arguments: []))
+    try repo.save(FrameworkConfiguration(schemaVersion: 1, actions: [action], menu: [DefaultConfiguration.reference(action.id)]))
+    let snapshot = try repo.load()
+    let dispatcher = ActionDispatcher(repository: repo, builder: builder, builtins: BuiltinRegistry())
+    let request = Invocation(actionID: "test", revision: snapshot.revision, context: context)
+    var outputs: [ExecutionResult] = []
+    dispatcher.submit(request) { outputs.append($0) }
+    dispatcher.submit(request) { outputs.append($0) }
+    let deadline = Date(timeIntervalSinceNow: 3)
+    while outputs.isEmpty && Date() < deadline { RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.02)) }
+    try expect(outputs.count == 1 && outputs[0].status == .succeeded, "duplicate invocation ran or dispatcher stalled")
+    dispatcher.submit(Invocation(actionID: "test", revision: "outdated", context: context)) { outputs.append($0) }
+    while outputs.count < 2 && Date() < deadline { RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.02)) }
+    try expect(outputs.count == 2 && outputs[1].jobs[0].errorCode == "config.changed", "stale configuration executed")
+}
+
+print("\(passed) passed, \(failed) failed")
+exit(failed == 0 ? 0 : 1)
