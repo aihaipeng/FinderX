@@ -64,6 +64,18 @@ test("copy-to uses one command for mixed selections and an editable destination"
     configured.execution.arguments?[1] = Template.literal(folder.path)
     try ConfigurationCodec.validate(FrameworkConfiguration(schemaVersion: 1, actions: [configured], menu: [DefaultConfiguration.reference(configured.id)]))
 }
+test("copy targets distinguish chooser and fixed destinations") {
+    let chooser = defaults.actions.first { $0.id == "files.copy-to" }!
+    try expect(DefaultConfiguration.copyTarget(for: chooser)?.isChooser == true, "default copy action must be the chooser")
+    let oddPath = folder.appendingPathComponent("copy {literal} 'quoted'").path
+    let fixed = DefaultConfiguration.copyAction(name: "归档", path: oddPath)
+    let configuration = FrameworkConfiguration(schemaVersion: 1, actions: [fixed],
+        menu: [DefaultConfiguration.reference(fixed.id)])
+    try ConfigurationCodec.validate(configuration)
+    let target = DefaultConfiguration.copyTarget(for: fixed)
+    try expect(target?.path == oddPath && target?.isChooser == false, "fixed copy path lost")
+    try expect(fixed.title == "拷贝到 归档" && fixed.execution.timeoutSeconds == 600, "fixed copy action shape changed")
+}
 test("copy-to upgrade backs up exact config once and preserves later customization") {
     var previous = defaults
     previous.actions.removeAll { $0.id == "files.copy-to" }
@@ -521,6 +533,73 @@ test("dependency reasons expose short visible labels") {
     try expect(DependencyAvailability.shortReason("请等待主程序检查脚本依赖，稍后重新打开菜单。") == "正在检查依赖", "wait reason")
 }
 
+test("settings toggles, copy targets and send references update configuration") {
+    let directory = root.appendingPathComponent("config-store")
+    try fm.createDirectory(at: directory, withIntermediateDirectories: true)
+    let repo = ConfigurationRepository(url: directory.appendingPathComponent("config.json"), home: home.path, writable: true)
+    let store = ConfigStore(repository: repo)
+    store.load()
+    try expect(store.snapshot != nil, "store failed to load")
+
+    try expect(store.setActionEnabled(id: "send.localsend", enabled: false), "disable send action")
+    try expect(store.snapshot?.action("send.localsend")?.isEnabled == false, "disabled action not persisted")
+    let hidden = MenuBuilder.build(snapshot: store.snapshot!, context: context)
+    func flatten(_ nodes: [MenuModel]) -> [MenuModel] { nodes.flatMap { [$0] + flatten($0.children) } }
+    try expect(!flatten(hidden).contains { $0.actionID == "send.localsend" }, "disabled send action still in menu")
+
+    try expect(store.addSendReference(actionID: "clipboard.paths"), "add send reference")
+    try expect(store.sendActions.contains { $0.id == "clipboard.paths" }, "send reference missing")
+    try expect(store.removeSendReference(actionID: "clipboard.paths"), "remove send reference")
+    try expect(!store.sendActions.contains { $0.id == "clipboard.paths" }, "send reference retained")
+    try expect(store.snapshot?.action("clipboard.paths") != nil, "removing send reference deleted action")
+
+    var withoutSend = store.snapshot!.configuration
+    withoutSend.menu[0].children?.removeAll { $0.id == "menu.send" }
+    try repo.save(withoutSend)
+    store.load()
+    try expect(store.addSendReference(actionID: "send.localsend"), "send group not created")
+    try expect(store.actions(inGroup: "menu.send").contains { $0.id == "send.localsend" }, "send group missing action")
+
+    let fixed = DefaultConfiguration.copyAction(name: "归档", path: folder.path)
+    var withFixed = store.snapshot!.configuration
+    withFixed.actions.append(fixed)
+    try repo.save(withFixed)
+    store.load()
+    try expect(store.copyTargets.contains { $0.id == fixed.id }, "fixed copy target missing")
+    try expect(store.removeCopyTarget(actionID: fixed.id), "fixed copy target not removable")
+    try expect(store.snapshot?.action(fixed.id) == nil, "fixed copy action retained")
+    try expect(store.removeCopyTarget(actionID: "files.copy-to") == false, "chooser must not be removable")
+
+    let copyFolder = root.appendingPathComponent("copy-fixed")
+    try fm.createDirectory(at: copyFolder, withIntermediateDirectories: true)
+    try expect(store.addCopyTargets(at: [copyFolder]) == [SharedConfig.displayName(for: copyFolder)], "fixed target not added")
+    let addedTarget = store.copyTargets.first { $0.path == copyFolder.path }
+    try expect(addedTarget != nil, "added fixed target missing")
+    try expect(store.addCopyTargets(at: [copyFolder]).isEmpty, "duplicate fixed target added")
+    let addedID = addedTarget!.id
+    try expect(store.snapshot?.configuration.menu.contains { node in
+        node.children?.contains { $0.actionID == addedID } == true
+    } == true, "fixed target menu reference missing")
+    try expect(store.removeCopyTarget(actionID: addedID), "added fixed target not removable")
+    try expect(store.snapshot?.action(addedID) == nil, "added fixed target action retained")
+    try expect(store.snapshot?.configuration.menu.contains { node in
+        node.children?.contains { $0.actionID == addedID } == true
+    } == false, "added fixed target menu reference retained")
+
+    var withoutCopy = store.snapshot!.configuration
+    withoutCopy.actions.removeAll { $0.id == "files.copy-to" }
+    withoutCopy.menu[0].children?.removeAll { $0.actionID == "files.copy-to" }
+    try repo.save(withoutCopy)
+    store.load()
+    try expect(store.restoreDefaultCopyAction(), "default copy action not restored")
+    try expect(store.snapshot?.action("files.copy-to") != nil, "default copy action missing after restore")
+}
+test("settings groups follow menu/operation, advanced, overview order") {
+    try expect(SettingsSection.groups.map(\.title) == ["菜单与操作", "进阶", "概览"], "group order changed")
+    try expect(SettingsSection.groups[0].sections == [.openWith, .destinations, .copyTo, .sendTo], "menu group changed")
+    try expect(SettingsSection.groups[1].sections == [.scripts, .advanced], "advanced group changed")
+    try expect(SettingsSection.groups[2].sections == [.status], "overview group changed")
+}
 test("settings navigation history branches and ignores repeated selections") {
     let navigation = SettingsNavigation()
     var changes = 0
@@ -547,14 +626,14 @@ test("settings search trims whitespace and matches page titles and keywords") {
     try expect(SettingsSection.matching("  ") == SettingsSection.allCases, "blank search")
     try expect(SettingsSection.matching("app") == [.openWith], "case-insensitive keyword")
     try expect(SettingsSection.matching(" 自定义 ") == [.scripts], "trimmed page title")
-    try expect(SettingsSection.matching("Finder") == [.status, .advanced], "multiple results retain sidebar order")
+    try expect(SettingsSection.matching("Finder") == [.advanced, .status], "multiple results retain sidebar order")
     try expect(SettingsSection.matching("no-such-page").isEmpty, "no search results")
 }
 
 test("settings search groups keyword suggestions and ranks matching page titles first") {
     let rows = SettingsSection.searchRows("配置")
-    try expect(rows.map(\.title) == ["状态", "配置", "高级", "配置文件"], "keyword rows and page headings")
-    try expect(rows.filter(\.selectable).map(\.title) == ["配置", "配置文件"], "nonmatching parent must not consume keyboard selection")
+    try expect(rows.map(\.title) == ["高级", "配置文件", "状态", "配置"], "keyword rows and page headings")
+    try expect(rows.filter(\.selectable).map(\.title) == ["配置文件", "配置"], "nonmatching parent must not consume keyboard selection")
     try expect(rows.map(\.id).count == Set(rows.map(\.id)).count, "search row identities")
     try expect(SettingsSection.searchRows("高级").first?.selectable == true, "matching title is selectable")
     try expect(SettingsSection.searchRows("Ａｐｐ").map(\.title) == ["打开方式", "App"], "fullwidth query normalization")

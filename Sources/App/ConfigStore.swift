@@ -11,6 +11,134 @@ final class ConfigStore {
     var destinations: [Destination] {
         (snapshot?.configuration.actions ?? []).compactMap(DefaultConfiguration.destination)
     }
+    var copyTargets: [CopyTarget] {
+        (snapshot?.configuration.actions ?? []).compactMap(DefaultConfiguration.copyTarget)
+    }
+    var sendActions: [ActionDefinition] { actions(inGroup: "menu.send") }
+
+    func actions(inGroup id: String) -> [ActionDefinition] {
+        guard let configuration = snapshot?.configuration else { return [] }
+        return actions(inGroup: id, configuration: configuration)
+    }
+
+    @discardableResult
+    func setActionEnabled(id: String, enabled: Bool) -> Bool {
+        do {
+            var configuration = try editableConfiguration()
+            guard let index = configuration.actions.firstIndex(where: { $0.id == id }) else { return false }
+            guard configuration.actions[index].isEnabled != enabled else { return true }
+            configuration.actions[index].enabled = enabled
+            try save(configuration)
+            return true
+        } catch {
+            FileActions.showError(error)
+            return false
+        }
+    }
+
+    @discardableResult
+    func removeCopyTarget(actionID: String) -> Bool {
+        guard let action = snapshot?.action(actionID),
+              DefaultConfiguration.copyTarget(for: action)?.path != nil else { return false }
+        return removeActions([actionID])
+    }
+
+    @discardableResult
+    func restoreDefaultCopyAction() -> Bool {
+        let action = DefaultConfiguration.copyToAction
+        do {
+            var configuration = try editableConfiguration()
+            guard !configuration.actions.contains(where: { $0.id == action.id }) else { return false }
+            configuration.actions.append(action)
+            if !insertCopyReference(DefaultConfiguration.reference(action.id), into: &configuration.menu) {
+                configuration.menu.append(DefaultConfiguration.reference(action.id))
+            }
+            try save(configuration)
+            return true
+        } catch {
+            FileActions.showError(error)
+            return false
+        }
+    }
+
+    @discardableResult
+    func addSendReference(actionID: String) -> Bool {
+        do {
+            var configuration = try editableConfiguration()
+            guard configuration.actions.contains(where: { $0.id == actionID }),
+                  !actions(inGroup: "menu.send", configuration: configuration).contains(where: { $0.id == actionID }) else {
+                return false
+            }
+            let node = MenuDefinition(type: .action, id: "menu.send." + UUID().uuidString.lowercased(), actionID: actionID)
+            if !append(node, to: "menu.send", nodes: &configuration.menu) {
+                let group = MenuDefinition(type: .group, id: "menu.send", title: "发送到", icon: "paperplane", children: [node])
+                if !append(group, to: "menu.finderx", nodes: &configuration.menu) { configuration.menu.append(group) }
+            }
+            try save(configuration)
+            return true
+        } catch {
+            FileActions.showError(error)
+            return false
+        }
+    }
+
+    @discardableResult
+    func removeSendReference(actionID: String) -> Bool {
+        do {
+            var configuration = try editableConfiguration()
+            guard removeReference(actionID, fromGroup: "menu.send", nodes: &configuration.menu) else { return false }
+            try save(configuration)
+            return true
+        } catch {
+            FileActions.showError(error)
+            return false
+        }
+    }
+
+    @discardableResult
+    func addCopyTargetsViaPanel() -> [String] {
+        do {
+            _ = try repository.load()
+            if let error = blockingError(repository.lastError) { throw error }
+            NSApp.activate(ignoringOtherApps: true)
+            let panel = NSOpenPanel()
+            panel.canChooseDirectories = true; panel.canChooseFiles = false
+            panel.allowsMultipleSelection = true; panel.canCreateDirectories = true
+            panel.prompt = "添加"; panel.message = "选择固定的“拷贝到”目标文件夹"
+            guard panel.runModal() == .OK else { return [] }
+            return addCopyTargets(at: panel.urls)
+        } catch {
+            FileActions.showError(error)
+            return []
+        }
+    }
+
+    @discardableResult
+    func addCopyTargets(at urls: [URL]) -> [String] {
+        do {
+            var configuration = try editableConfiguration()
+            var known = Set(configuration.actions.compactMap(DefaultConfiguration.copyTarget).compactMap(\.path)
+                .map { URL(fileURLWithPath: $0).standardizedFileURL.path })
+            var added: [String] = []
+            for url in urls {
+                let path = url.standardizedFileURL.path
+                guard known.insert(path).inserted else { continue }
+                let name = SharedConfig.displayName(for: url)
+                let destination = DefaultConfiguration.copyAction(name: name, path: path)
+                configuration.actions.append(destination)
+                if !insertCopyReference(DefaultConfiguration.reference(destination.id), into: &configuration.menu) {
+                    configuration.menu.append(DefaultConfiguration.reference(destination.id))
+                }
+                added.append(name)
+            }
+            guard !added.isEmpty else { return [] }
+            try save(configuration)
+            return added
+        } catch {
+            FileActions.showError(error)
+            return []
+        }
+    }
 
     func load() {
         do { snapshot = try repository.load() }
@@ -260,6 +388,51 @@ final class ConfigStore {
         try repository.save(configuration)
         snapshot = repository.snapshot
         onChange?()
+    }
+    private func actions(inGroup id: String, configuration: FrameworkConfiguration) -> [ActionDefinition] {
+        guard let children = menuChildren(id, in: configuration.menu) else { return [] }
+        var seen = Set<String>()
+        return children.compactMap { node in
+            guard node.type == .action, let actionID = node.actionID, seen.insert(actionID).inserted else { return nil }
+            return configuration.actions.first { $0.id == actionID }
+        }
+    }
+    private func menuChildren(_ id: String, in nodes: [MenuDefinition]) -> [MenuDefinition]? {
+        for node in nodes {
+            if node.id == id, node.type == .group { return node.children ?? [] }
+            if let children = node.children, let found = menuChildren(id, in: children) { return found }
+        }
+        return nil
+    }
+    private func insertCopyReference(_ node: MenuDefinition, into nodes: inout [MenuDefinition]) -> Bool {
+        for index in nodes.indices {
+            if nodes[index].id == "menu.finderx", nodes[index].type == .group {
+                var children = nodes[index].children ?? []
+                let position = children.firstIndex { $0.id == "menu.move" } ?? children.endIndex
+                children.insert(node, at: position)
+                nodes[index].children = children
+                return true
+            }
+            if var children = nodes[index].children, insertCopyReference(node, into: &children) {
+                nodes[index].children = children
+                return true
+            }
+        }
+        return false
+    }
+    private func removeReference(_ actionID: String, fromGroup id: String, nodes: inout [MenuDefinition]) -> Bool {
+        for index in nodes.indices {
+            if nodes[index].id == id, nodes[index].type == .group {
+                let before = nodes[index].children?.count ?? 0
+                nodes[index].children?.removeAll { $0.type == .action && $0.actionID == actionID }
+                if (nodes[index].children?.count ?? 0) != before { return true }
+            }
+            if var children = nodes[index].children, removeReference(actionID, fromGroup: id, nodes: &children) {
+                nodes[index].children = children
+                return true
+            }
+        }
+        return false
     }
     private func addReference(_ node: MenuDefinition, group: String, title: String, configuration: inout FrameworkConfiguration) {
         if append(node, to: group, nodes: &configuration.menu) { return }

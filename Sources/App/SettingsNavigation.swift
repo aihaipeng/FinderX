@@ -2,44 +2,50 @@ import Combine
 import Foundation
 
 enum SettingsSection: Int, CaseIterable, Identifiable {
-    case status, openWith, scripts, destinations, advanced
+    case openWith, destinations, copyTo, sendTo, scripts, advanced, status
 
     var id: Self { self }
 
     var title: String {
         switch self {
-        case .status: return "状态"
         case .openWith: return "打开方式"
+        case .destinations: return "移动到"
+        case .copyTo: return "拷贝到"
+        case .sendTo: return "发送到"
         case .scripts: return "自定义脚本"
-        case .destinations: return "移动目标"
         case .advanced: return "高级"
+        case .status: return "状态"
         }
     }
 
     var symbol: String {
         switch self {
-        case .status: return "info.circle"
         case .openWith: return "square.grid.2x2"
-        case .scripts: return "terminal"
         case .destinations: return "folder"
+        case .copyTo: return "doc.on.doc"
+        case .sendTo: return "paperplane"
+        case .scripts: return "terminal"
         case .advanced: return "gearshape"
+        case .status: return "info.circle"
         }
     }
 
     var keywords: [String] {
         switch self {
-        case .status: return ["Finder", "扩展", "配置", "加载", "启用", "权限"]
         case .openWith: return ["App", "应用", "打开", "添加", "其他", "浏览"]
-        case .scripts: return ["脚本", "zsh", "终端", "目录", "编辑", "移除"]
-        case .destinations: return ["文件夹", "移动", "目标", "Dock", "快捷方式", "符号链接"]
+        case .destinations: return ["文件夹", "移动", "移动到", "目标", "Dock", "快捷方式", "符号链接"]
+        case .copyTo: return ["拷贝", "复制", "目标", "文件夹", "固定", "选择"]
+        case .sendTo: return ["发送", "LocalSend", "快捷方式", "桌面", "符号链接", "动作"]
+        case .scripts: return ["脚本", "zsh", "终端", "目录", "编辑", "移除", "自定义"]
         case .advanced: return ["Finder", "配置文件", "路径", "重新加载", "维护", "扩展", "权限"]
+        case .status: return ["Finder", "扩展", "配置", "加载", "启用", "权限", "概览"]
         }
     }
 
     static let groups: [(title: String, sections: [Self])] = [
-        ("概览", [.status]),
-        ("菜单与操作", [.openWith, .scripts, .destinations]),
-        ("进阶", [.advanced])
+        ("菜单与操作", [.openWith, .destinations, .copyTo, .sendTo]),
+        ("进阶", [.scripts, .advanced]),
+        ("概览", [.status])
     ]
 
     static func matching(_ query: String) -> [Self] {

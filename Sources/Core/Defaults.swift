@@ -9,6 +9,12 @@ struct Destination: Identifiable, Hashable {
     }
 }
 
+struct CopyTarget: Identifiable, Hashable {
+    let id: String
+    let path: String?
+    var isChooser: Bool { path == nil }
+}
+
 enum DefaultConfiguration {
     static let scriptDirectory = "{home}/Library/Containers/com.finderx.app.finder/Data/Library/Application Support/FinderX/Scripts"
     static func scriptPath(_ name: String) -> String { scriptDirectory + "/" + name + ".zsh" }
@@ -33,6 +39,25 @@ enum DefaultConfiguration {
         var execution = script("copy-to", arguments: ["--choose", "{paths}"])
         execution.timeoutSeconds = 600
         return ActionDefinition(id: "files.copy-to", title: "拷贝到…", icon: "doc.on.doc",
+            when: MatchCondition(surfaces: [.items, .container, .sidebar], kinds: [.file, .directory]), execution: execution)
+    }
+
+    static func copyTarget(for action: ActionDefinition) -> CopyTarget? {
+        guard action.execution.type == .command,
+              let arguments = action.execution.arguments, arguments.count == 3,
+              arguments[0] == scriptPath("copy-to"), arguments[2] == "{paths}" else { return nil }
+        if arguments[1] == "--choose" {
+            return CopyTarget(id: action.id, path: nil)
+        }
+        let path = (try? Template.expand(arguments[1], values: ["home": FileManager.default.homeDirectoryForCurrentUser.path])) ?? arguments[1]
+        guard path.hasPrefix("/") else { return nil }
+        return CopyTarget(id: action.id, path: path)
+    }
+
+    static func copyAction(name: String, path: String) -> ActionDefinition {
+        var execution = script("copy-to", arguments: [Template.literal(path), "{paths}"])
+        execution.timeoutSeconds = 600
+        return ActionDefinition(id: "copy." + UUID().uuidString.lowercased(), title: "拷贝到 \(name)", icon: "doc.on.doc",
             when: MatchCondition(surfaces: [.items, .container, .sidebar], kinds: [.file, .directory]), execution: execution)
     }
 

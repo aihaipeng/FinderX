@@ -8,5 +8,6 @@ TARGET="$(uname -m)-apple-macosx${MACOSX_DEPLOYMENT_TARGET}"
 for script in "$ROOT"/Resources/Scripts/*.zsh; do /bin/zsh -n "$script"; done
 swiftc -target "$TARGET" -o "$TEST_BUILD/tests" "$ROOT"/Sources/Core/*.swift "$ROOT"/Sources/Runtime/*.swift \
   "$ROOT"/Sources/Shared/*.swift "$ROOT/Sources/Platform/macOS/NativeCommands.swift" \
-  "$ROOT/Sources/Platform/macOS/ScriptLibrary.swift" "$ROOT/Sources/App/SettingsNavigation.swift" "$ROOT/Tests/main.swift" -framework Cocoa
+  "$ROOT/Sources/Platform/macOS/ScriptLibrary.swift" "$ROOT/Sources/App/SettingsNavigation.swift" \
+  "$ROOT/Sources/App/ConfigStore.swift" "$ROOT/Sources/App/FileActions.swift" "$ROOT/Tests/main.swift" -framework Cocoa
 "$TEST_BUILD/tests" "$ROOT"

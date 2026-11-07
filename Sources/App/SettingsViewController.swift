@@ -119,8 +119,10 @@ final class SettingsViewController: NSViewController, NSUserInterfaceValidations
         switch navigation.section {
         case .status: page = makeStatusPage()
         case .openWith: page = makeOpenWithPage()
-        case .scripts: page = makeScriptsPage()
         case .destinations: page = makeDestinationsPage()
+        case .copyTo: page = makeCopyToPage()
+        case .sendTo: page = makeSendToPage()
+        case .scripts: page = makeScriptsPage()
         case .advanced: page = makeAdvancedPage()
         }
 
@@ -368,7 +370,7 @@ final class SettingsViewController: NSViewController, NSUserInterfaceValidations
     }
 
     private func makeDestinationsPage() -> NSView {
-        let header = pageHeader("移动目标", "管理“移动到”子菜单中显示的目标文件夹。")
+        let header = pageHeader("移动到", "管理“移动到”子菜单中显示的目标文件夹。")
         let heading = sectionTitle("目标文件夹")
         let destinations = store.destinations
         let rows: [NSView] = destinations.isEmpty
@@ -391,6 +393,70 @@ final class SettingsViewController: NSViewController, NSUserInterfaceValidations
         if let banner { stack.setCustomSpacing(24, after: banner) }
         stack.setCustomSpacing(10, after: heading)
         stack.setCustomSpacing(14, after: listCard)
+        return stack
+    }
+
+    private func makeCopyToPage() -> NSView {
+        let header = pageHeader("拷贝到", "选择目标文件夹后拷贝所选项目，重名自动编号。")
+        let heading = sectionTitle("拷贝动作")
+        let targets = store.copyTargets
+        let rows: [NSView] = targets.isEmpty
+            ? [emptyRow(emptyMessage("尚未启用“拷贝到”动作。"))]
+            : targets.compactMap { target in
+                store.snapshot?.action(target.id).map { copyRow(target, action: $0) }
+            }
+        let listCard = card(rows)
+        var buttons = [smallButton("添加固定目标…", action: #selector(addCopyTargets))]
+        if !targets.contains(where: \.isChooser) {
+            buttons.append(smallButton("恢复默认动作", action: #selector(restoreCopyAction)))
+        }
+        buttons.append(smallButton("打开脚本目录", action: #selector(openScripts)))
+        let actions = NSStackView(views: buttons)
+        actions.orientation = .horizontal
+        actions.alignment = .centerY
+        actions.spacing = 8
+        actions.translatesAutoresizingMaskIntoConstraints = false
+        let note = noteLabel("源文件保留；取消目标选择不会拷贝。固定目标与“拷贝到…”共用同一脚本。")
+        let banner = configErrorBanner()
+        var views: [NSView] = [header]
+        if let banner { views.append(banner) }
+        views += [heading, listCard, actions, note]
+        let stack = pageStack(views)
+        stack.setCustomSpacing(24, after: header)
+        if let banner { stack.setCustomSpacing(24, after: banner) }
+        stack.setCustomSpacing(10, after: heading)
+        stack.setCustomSpacing(14, after: listCard)
+        stack.setCustomSpacing(14, after: actions)
+        return stack
+    }
+
+    private func makeSendToPage() -> NSView {
+        let header = pageHeader("发送到", "管理“发送到”子菜单中的操作。")
+        let heading = sectionTitle("发送动作")
+        let actions = store.sendActions
+        let rows: [NSView] = actions.isEmpty
+            ? [emptyRow(emptyMessage("尚未添加发送动作。"))]
+            : actions.map { sendRow($0) }
+        let listCard = card(rows)
+        let buttons = NSStackView(views: [
+            smallButton("添加动作…", action: #selector(addSendAction)),
+            smallButton("打开脚本目录", action: #selector(openScripts))
+        ])
+        buttons.orientation = .horizontal
+        buttons.alignment = .centerY
+        buttons.spacing = 8
+        buttons.translatesAutoresizingMaskIntoConstraints = false
+        let note = noteLabel("移除只影响“发送到”子菜单，动作本身仍保留在配置中。")
+        let banner = configErrorBanner()
+        var views: [NSView] = [header]
+        if let banner { views.append(banner) }
+        views += [heading, listCard, buttons, note]
+        let stack = pageStack(views)
+        stack.setCustomSpacing(24, after: header)
+        if let banner { stack.setCustomSpacing(24, after: banner) }
+        stack.setCustomSpacing(10, after: heading)
+        stack.setCustomSpacing(14, after: listCard)
+        stack.setCustomSpacing(14, after: buttons)
         return stack
     }
 
@@ -661,10 +727,10 @@ final class SettingsViewController: NSViewController, NSUserInterfaceValidations
 
     private func scriptRow(_ action: ActionDefinition) -> NSView {
         let edit = iconButton(symbol: "pencil", label: "编辑脚本：\(action.title)",
-            action: #selector(editCustomScript(_:)))
+            action: #selector(editScript(_:)))
         edit.identifier = NSUserInterfaceItemIdentifier("script.edit." + action.id)
         let reveal = iconButton(symbol: "folder", label: "在 Finder 中显示脚本：\(action.title)",
-            action: #selector(revealCustomScript(_:)))
+            action: #selector(revealScript(_:)))
         reveal.identifier = NSUserInterfaceItemIdentifier("script.reveal." + action.id)
         let remove = removeButton(action: #selector(removeCustomScript(_:)), label: action.title)
         remove.identifier = NSUserInterfaceItemIdentifier("remove." + action.id)
@@ -673,15 +739,48 @@ final class SettingsViewController: NSViewController, NSUserInterfaceValidations
     }
 
     private func destinationRow(_ destination: Destination, index: Int) -> NSView {
+        let enabled = store.snapshot?.action(destination.id)?.isEnabled ?? true
+        let toggle = actionToggle(id: destination.id, isOn: enabled, label: "启用移动到 \(destination.name)")
         let remove = removeButton(action: #selector(removeDestination(_:)), label: destination.name)
         remove.tag = index
         remove.identifier = NSUserInterfaceItemIdentifier("remove." + destination.id)
         return listRow(title: destination.name, detail: destination.path,
-            symbol: "folder", tint: .systemIndigo, trailing: [remove])
+            symbol: "folder", tint: .systemIndigo, trailing: [toggle, remove], enabled: enabled)
+    }
+
+    private func copyRow(_ target: CopyTarget, action: ActionDefinition) -> NSView {
+        let enabled = action.isEnabled
+        let toggle = actionToggle(id: action.id, isOn: enabled, label: "启用 \(action.title)")
+        let edit = iconButton(symbol: "pencil", label: "编辑脚本：\(action.title)", action: #selector(editScript(_:)))
+        edit.identifier = NSUserInterfaceItemIdentifier("script.edit." + action.id)
+        let reveal = iconButton(symbol: "folder", label: "在 Finder 中显示脚本：\(action.title)", action: #selector(revealScript(_:)))
+        reveal.identifier = NSUserInterfaceItemIdentifier("script.reveal." + action.id)
+        var trailing: [NSControl] = [toggle, edit, reveal]
+        if !target.isChooser {
+            let remove = removeButton(action: #selector(removeCopyTarget(_:)), label: action.title)
+            remove.identifier = NSUserInterfaceItemIdentifier("remove." + action.id)
+            trailing.append(remove)
+        }
+        return listRow(title: action.title, detail: target.path ?? "每次点击后选择目标文件夹",
+            symbol: "doc.on.doc", tint: .systemBlue, trailing: trailing, enabled: enabled)
+    }
+
+    private func sendRow(_ action: ActionDefinition) -> NSView {
+        let enabled = action.isEnabled
+        let toggle = actionToggle(id: action.id, isOn: enabled, label: "启用 \(action.title)")
+        let edit = iconButton(symbol: "pencil", label: "编辑脚本：\(action.title)", action: #selector(editScript(_:)))
+        edit.identifier = NSUserInterfaceItemIdentifier("script.edit." + action.id)
+        let reveal = iconButton(symbol: "folder", label: "在 Finder 中显示脚本：\(action.title)", action: #selector(revealScript(_:)))
+        reveal.identifier = NSUserInterfaceItemIdentifier("script.reveal." + action.id)
+        let remove = removeButton(action: #selector(removeSendAction(_:)), label: action.title)
+        remove.identifier = NSUserInterfaceItemIdentifier("remove." + action.id)
+        return listRow(title: action.title, detail: scriptPath(for: action),
+            symbol: action.icon ?? "paperplane", tint: .systemGreen,
+            trailing: [toggle, edit, reveal, remove], enabled: enabled)
     }
 
     private func listRow(title: String, detail: String?, symbol: String, tint: NSColor,
-                         trailing: [NSButton]) -> NSView {
+                         trailing: [NSControl], enabled: Bool = true) -> NSView {
         let row = NSView()
         row.translatesAutoresizingMaskIntoConstraints = false
         row.heightAnchor.constraint(greaterThanOrEqualToConstant: 41).isActive = true
@@ -695,6 +794,7 @@ final class SettingsViewController: NSViewController, NSUserInterfaceValidations
         let titleLabel = NSTextField(labelWithString: title)
         titleLabel.font = settingsFont(.body, weight: .medium)
         titleLabel.lineBreakMode = .byTruncatingTail
+        titleLabel.textColor = enabled ? .labelColor : .secondaryLabelColor
         titleLabel.toolTip = title
         titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -733,8 +833,13 @@ final class SettingsViewController: NSViewController, NSUserInterfaceValidations
         } else {
             for button in trailing {
                 button.translatesAutoresizingMaskIntoConstraints = false
-                button.widthAnchor.constraint(equalToConstant: 24).isActive = true
-                button.heightAnchor.constraint(equalToConstant: 24).isActive = true
+                if button is NSSwitch {
+                    button.widthAnchor.constraint(equalToConstant: 38).isActive = true
+                    button.heightAnchor.constraint(equalToConstant: 22).isActive = true
+                } else {
+                    button.widthAnchor.constraint(equalToConstant: 24).isActive = true
+                    button.heightAnchor.constraint(equalToConstant: 24).isActive = true
+                }
             }
             let controls = NSStackView(views: trailing)
             controls.orientation = .horizontal
@@ -823,6 +928,18 @@ final class SettingsViewController: NSViewController, NSUserInterfaceValidations
         return button
     }
 
+    private func actionToggle(id: String, isOn: Bool, label: String) -> NSSwitch {
+        let toggle = NSSwitch()
+        toggle.state = isOn ? .on : .off
+        toggle.controlSize = .small
+        toggle.target = self
+        toggle.action = #selector(toggleAction(_:))
+        toggle.identifier = NSUserInterfaceItemIdentifier("toggle." + id)
+        toggle.setAccessibilityLabel(label)
+        toggle.translatesAutoresizingMaskIntoConstraints = false
+        return toggle
+    }
+
     private func removeButton(action: Selector, label: String) -> NSButton {
         let button = iconButton(symbol: "minus.circle.fill", label: "移除 \(label)", action: action)
         button.contentTintColor = .secondaryLabelColor
@@ -865,24 +982,7 @@ final class SettingsViewController: NSViewController, NSUserInterfaceValidations
         return icon
     }
 
-    private func actions(inGroup id: String) -> [ActionDefinition] {
-        guard let configuration = store.snapshot?.configuration else { return [] }
-        func find(_ nodes: [MenuDefinition]) -> [MenuDefinition]? {
-            for node in nodes {
-                if node.id == id, node.type == .group { return node.children }
-                if let children = node.children, let found = find(children) { return found }
-            }
-            return nil
-        }
-        guard let children = find(configuration.menu) else { return [] }
-        var seen = Set<String>()
-        return children.compactMap { node in
-            guard node.type == .action, let actionID = node.actionID, seen.insert(actionID).inserted else {
-                return nil
-            }
-            return configuration.actions.first { $0.id == actionID }
-        }
-    }
+    private func actions(inGroup id: String) -> [ActionDefinition] { store.actions(inGroup: id) }
 
     @objc func refreshStatus() {
         let enabled = FIFinderSyncController.isExtensionEnabled
@@ -940,6 +1040,38 @@ final class SettingsViewController: NSViewController, NSUserInterfaceValidations
         let names = store.addViaPanel()
         if !names.isEmpty { announce("已添加移动目标 \(names.joined(separator: "、"))。") }
     }
+    @objc private func addCopyTargets() {
+        let names = store.addCopyTargetsViaPanel()
+        if !names.isEmpty { announce("已添加固定拷贝目标 \(names.joined(separator: "、"))。") }
+    }
+    @objc private func restoreCopyAction() {
+        if store.restoreDefaultCopyAction() { announce("已恢复默认“拷贝到…”动作。") }
+    }
+    @objc private func addSendAction() {
+        let existing = Set(store.sendActions.map(\.id))
+        let candidates = (store.snapshot?.configuration.actions ?? [])
+            .filter { $0.execution.type == .command && !existing.contains($0.id) }
+            .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+        guard !candidates.isEmpty else {
+            FileActions.showError(FrameworkError(code: "config.invalid",
+                message: "没有可添加的动作。请先在“打开方式”或“自定义脚本”中添加。"))
+            return
+        }
+        let popup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 280, height: 26), pullsDown: false)
+        popup.addItems(withTitles: candidates.map(\.title))
+        let alert = NSAlert()
+        alert.messageText = "添加到“发送到”"
+        alert.informativeText = "选择一个已有动作加入“发送到”子菜单。"
+        alert.accessoryView = popup
+        alert.addButton(withTitle: "添加"); alert.addButton(withTitle: "取消")
+        NSApp.activate(ignoringOtherApps: true)
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let index = popup.indexOfSelectedItem
+        guard candidates.indices.contains(index) else { return }
+        if store.addSendReference(actionID: candidates[index].id) {
+            announce("已添加 \(candidates[index].title)。")
+        }
+    }
     @objc private func addCustomScript() {
         if let name = store.addCustomScript() { announce("已添加自定义脚本 \(name)。") }
     }
@@ -951,8 +1083,8 @@ final class SettingsViewController: NSViewController, NSUserInterfaceValidations
         refresh()
     }
 
-    @objc private func editCustomScript(_ sender: NSButton) {
-        guard let action = scriptAction(for: sender, prefix: "script.edit."),
+    @objc private func editScript(_ sender: NSButton) {
+        guard let action = action(for: sender, prefix: "script.edit."),
               let path = scriptPath(for: action) else { return }
         guard FileManager.default.fileExists(atPath: path) else {
             FileActions.showError(FrameworkError(code: "script.missing", message: "脚本不存在：\(path)"))
@@ -961,10 +1093,22 @@ final class SettingsViewController: NSViewController, NSUserInterfaceValidations
         NSWorkspace.shared.open(URL(fileURLWithPath: path))
     }
 
-    @objc private func revealCustomScript(_ sender: NSButton) {
-        guard let action = scriptAction(for: sender, prefix: "script.reveal."),
+    @objc private func revealScript(_ sender: NSButton) {
+        guard let action = action(for: sender, prefix: "script.reveal."),
               let path = scriptPath(for: action) else { return }
         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+    }
+
+    @objc private func toggleAction(_ sender: NSSwitch) {
+        guard let raw = sender.identifier?.rawValue, raw.hasPrefix("toggle.") else { return }
+        let actionID = String(raw.dropFirst("toggle.".count))
+        let enabled = sender.state == .on
+        let title = store.snapshot?.action(actionID)?.title ?? "动作"
+        guard store.setActionEnabled(id: actionID, enabled: enabled) else {
+            sender.state = enabled ? .off : .on
+            return
+        }
+        announce("\(title)：\(enabled ? "已启用" : "已停用")。")
     }
 
     @objc private func removeApplication(_ sender: NSButton) {
@@ -983,8 +1127,40 @@ final class SettingsViewController: NSViewController, NSUserInterfaceValidations
         announce("已移除 \(name)。")
     }
 
+    @objc private func removeCopyTarget(_ sender: NSButton) {
+        guard let raw = sender.identifier?.rawValue, raw.hasPrefix("remove.") else { return }
+        let actionID = String(raw.dropFirst("remove.".count))
+        let list = store.copyTargets.filter { !$0.isChooser }
+        guard let index = list.firstIndex(where: { $0.id == actionID }),
+              let action = store.snapshot?.action(actionID) else { return }
+        let previous = store.snapshot?.configuration
+        pendingRemovalFocus = index
+        guard store.removeCopyTarget(actionID: actionID), let previous else {
+            pendingRemovalFocus = nil
+            return
+        }
+        registerRemovalUndo(name: action.title, previous: previous)
+        announce("已移除 \(action.title)，动作配置已删除。")
+    }
+
+    @objc private func removeSendAction(_ sender: NSButton) {
+        guard let raw = sender.identifier?.rawValue, raw.hasPrefix("remove.") else { return }
+        let actionID = String(raw.dropFirst("remove.".count))
+        let list = store.sendActions
+        guard let index = list.firstIndex(where: { $0.id == actionID }) else { return }
+        let title = list[index].title
+        let previous = store.snapshot?.configuration
+        pendingRemovalFocus = index
+        guard store.removeSendReference(actionID: actionID), let previous else {
+            pendingRemovalFocus = nil
+            return
+        }
+        registerRemovalUndo(name: title, previous: previous)
+        announce("已从“发送到”移除 \(title)，动作本身已保留。")
+    }
+
     @objc private func removeCustomScript(_ sender: NSButton) {
-        guard let action = scriptAction(for: sender, prefix: "remove.") else { return }
+        guard let action = customScriptAction(for: sender, prefix: "remove.") else { return }
         let list = actions(inGroup: "menu.custom")
         let index = list.firstIndex(where: { $0.id == action.id })
         let previous = store.snapshot?.configuration
@@ -997,10 +1173,16 @@ final class SettingsViewController: NSViewController, NSUserInterfaceValidations
         announce("已从菜单移除 \(action.title)，脚本文件已保留。")
     }
 
-    private func scriptAction(for sender: NSButton, prefix: String) -> ActionDefinition? {
+    private func action(for sender: NSButton, prefix: String) -> ActionDefinition? {
         guard let raw = sender.identifier?.rawValue, raw.hasPrefix(prefix) else { return nil }
         let actionID = String(raw.dropFirst(prefix.count))
-        return actions(inGroup: "menu.custom").first { $0.id == actionID }
+        return store.snapshot?.action(actionID)
+    }
+
+    private func customScriptAction(for sender: NSButton, prefix: String) -> ActionDefinition? {
+        guard let action = action(for: sender, prefix: prefix),
+              actions(inGroup: "menu.custom").contains(where: { $0.id == action.id }) else { return nil }
+        return action
     }
 
     @objc private func removeDestination(_ sender: NSButton) {
