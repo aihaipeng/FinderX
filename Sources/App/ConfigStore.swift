@@ -9,12 +9,65 @@ final class ConfigStore {
     private var lastNotification = ""
     var onChange: (() -> Void)?
     var destinations: [Destination] {
-        (snapshot?.configuration.actions ?? []).compactMap(DefaultConfiguration.destination)
+        orderedActions(inGroup: "menu.move").compactMap(DefaultConfiguration.destination)
     }
     var copyTargets: [CopyTarget] {
-        (snapshot?.configuration.actions ?? []).compactMap(DefaultConfiguration.copyTarget)
+        orderedActions(inGroup: "menu.finderx").compactMap(DefaultConfiguration.copyTarget)
     }
     var sendActions: [ActionDefinition] { actions(inGroup: "menu.send") }
+
+    private func orderedActions(inGroup group: String) -> [ActionDefinition] {
+        guard let configuration = snapshot?.configuration else { return [] }
+        return orderedActions(inGroup: group, configuration: configuration)
+    }
+
+    private func orderedActions(inGroup group: String, configuration: FrameworkConfiguration) -> [ActionDefinition] {
+        let ordered = actions(inGroup: group, configuration: configuration)
+        let ids = Set(ordered.map(\.id))
+        return ordered + configuration.actions.filter { !ids.contains($0.id) }
+    }
+
+    @discardableResult
+    func reorder(group: String, ids: [String]) -> Bool {
+        guard Set(ids).count == ids.count, ids.count > 1 else { return false }
+        do {
+            var configuration = try editableConfiguration()
+            let current: [String]
+            switch group {
+            case "menu.move": current = orderedActions(inGroup: group, configuration: configuration).compactMap(DefaultConfiguration.destination).map(\.id)
+            case "menu.finderx": current = orderedActions(inGroup: group, configuration: configuration).compactMap(DefaultConfiguration.copyTarget).map(\.id)
+            default: current = actions(inGroup: group, configuration: configuration).map(\.id)
+            }
+            guard Set(current) == Set(ids), current != ids else { return false }
+            let ranks = Dictionary(uniqueKeysWithValues: ids.enumerated().map { ($0.element, $0.offset) })
+            func reorderNodes(_ nodes: inout [MenuDefinition]) {
+                for index in nodes.indices {
+                    if nodes[index].id == group, nodes[index].type == .group, var children = nodes[index].children {
+                        let positions = children.indices.filter { children[$0].type == .action && ranks[children[$0].actionID ?? ""] != nil }
+                        let sorted = positions.map { children[$0] }.sorted {
+                            ranks[$0.actionID!]! < ranks[$1.actionID!]!
+                        }
+                        for (position, node) in zip(positions, sorted) { children[position] = node }
+                        nodes[index].children = children
+                    } else if var children = nodes[index].children {
+                        reorderNodes(&children)
+                        nodes[index].children = children
+                    }
+                }
+            }
+            reorderNodes(&configuration.menu)
+            if group == "menu.move" || group == "menu.finderx" {
+                let positions = configuration.actions.indices.filter { ranks[configuration.actions[$0].id] != nil }
+                let sorted = positions.map { configuration.actions[$0] }.sorted { ranks[$0.id]! < ranks[$1.id]! }
+                for (position, action) in zip(positions, sorted) { configuration.actions[position] = action }
+            }
+            try save(configuration)
+            return true
+        } catch {
+            FileActions.showError(error)
+            return false
+        }
+    }
 
     func actions(inGroup id: String) -> [ActionDefinition] {
         guard let configuration = snapshot?.configuration else { return [] }

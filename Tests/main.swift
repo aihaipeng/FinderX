@@ -594,6 +594,47 @@ test("settings toggles, copy targets and send references update configuration") 
     try expect(store.restoreDefaultCopyAction(), "default copy action not restored")
     try expect(store.snapshot?.action("files.copy-to") != nil, "default copy action missing after restore")
 }
+test("settings list reordering persists menu order and preserves other items") {
+    let directory = root.appendingPathComponent("settings-reorder")
+    try fm.createDirectory(at: directory, withIntermediateDirectories: true)
+    let repo = ConfigurationRepository(url: directory.appendingPathComponent("config.json"), home: home.path, writable: true)
+    let store = ConfigStore(repository: repo)
+    store.load()
+    let fixed = DefaultConfiguration.copyAction(name: "归档", path: folder.path)
+    var config = store.snapshot!.configuration
+    config.actions.append(fixed)
+    config.menu[0].children?.insert(DefaultConfiguration.reference(fixed.id), at: 0)
+    let openIndex = config.menu[0].children!.firstIndex { $0.id == "menu.open-with" }!
+    config.menu[0].children![openIndex].children = [MenuDefinition(type: .action, id: "test.open.clipboard", actionID: "clipboard.paths"), MenuDefinition(type: .action, id: "test.open.dock", actionID: "dock.pin")]
+    try repo.save(config)
+    store.load()
+
+    for (group, ids) in [
+        ("menu.open-with", store.actions(inGroup: "menu.open-with").map(\.id)),
+        ("menu.move", store.destinations.map(\.id)),
+        ("menu.finderx", store.copyTargets.map(\.id)),
+        ("menu.send", store.sendActions.map(\.id))
+    ] {
+        let reversed = Array(ids.reversed())
+        try expect(store.reorder(group: group, ids: reversed), "reorder failed for \(group)")
+        let actual: [String]
+        switch group {
+        case "menu.move": actual = store.destinations.map(\.id)
+        case "menu.finderx": actual = store.copyTargets.map(\.id)
+        default: actual = store.actions(inGroup: group).map(\.id)
+        }
+        try expect(actual == reversed, "display order failed for \(group)")
+        let menuIDs = store.actions(inGroup: group).map(\.id).filter { ids.contains($0) }
+        try expect(menuIDs == reversed, "menu order failed for \(group)")
+    }
+    let moveChildren = store.snapshot!.configuration.menu[0].children!.first { $0.id == "menu.move" }!.children!
+    try expect(moveChildren.suffix(2).map(\.id) == ["menu.separator.destinations", "menu.app.add-destination"], "non-list items moved")
+    try expect(!store.reorder(group: "menu.send", ids: ["send.localsend", "send.localsend"]), "duplicate ids accepted")
+    let expected = store.copyTargets.map(\.id)
+    let reloaded = ConfigStore(repository: ConfigurationRepository(url: repo.url, home: home.path, writable: true))
+    reloaded.load()
+    try expect(reloaded.copyTargets.map(\.id) == expected, "order did not persist")
+}
 test("settings groups follow menu/operation, advanced, overview order") {
     try expect(SettingsSection.groups.map(\.title) == ["菜单与操作", "进阶", "概览"], "group order changed")
     try expect(SettingsSection.groups[0].sections == [.openWith, .destinations, .copyTo, .sendTo], "menu group changed")

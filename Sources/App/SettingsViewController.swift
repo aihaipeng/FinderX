@@ -328,7 +328,7 @@ final class SettingsViewController: NSViewController, NSUserInterfaceValidations
         let rows: [NSView] = actions.isEmpty
             ? [emptyRow(emptyMessage("尚未添加应用。"))]
             : actions.map { appRow($0) }
-        let listCard = card(rows)
+        let listCard = reorderCard(rows, ids: actions.map(\.id), group: "menu.open-with")
         let banner = configErrorBanner()
         var views: [NSView] = [header]
         if let banner { views.append(banner) }
@@ -378,7 +378,7 @@ final class SettingsViewController: NSViewController, NSUserInterfaceValidations
             : destinations.enumerated().map { index, destination in
                 destinationRow(destination, index: index)
             }
-        let listCard = card(rows)
+        let listCard = reorderCard(rows, ids: destinations.map(\.id), group: "menu.move")
         let add = smallButton("添加文件夹…", action: #selector(addDestination))
         let buttons = NSStackView(views: [add])
         buttons.orientation = .horizontal
@@ -405,7 +405,7 @@ final class SettingsViewController: NSViewController, NSUserInterfaceValidations
             : targets.compactMap { target in
                 store.snapshot?.action(target.id).map { copyRow(target, action: $0) }
             }
-        let listCard = card(rows)
+        let listCard = reorderCard(rows, ids: targets.map(\.id), group: "menu.finderx")
         var buttons = [smallButton("添加固定目标…", action: #selector(addCopyTargets))]
         if !targets.contains(where: \.isChooser) {
             buttons.append(smallButton("恢复默认动作", action: #selector(restoreCopyAction)))
@@ -437,7 +437,7 @@ final class SettingsViewController: NSViewController, NSUserInterfaceValidations
         let rows: [NSView] = actions.isEmpty
             ? [emptyRow(emptyMessage("尚未添加发送动作。"))]
             : actions.map { sendRow($0) }
-        let listCard = card(rows)
+        let listCard = reorderCard(rows, ids: actions.map(\.id), group: "menu.send")
         let buttons = NSStackView(views: [
             smallButton("添加动作…", action: #selector(addSendAction)),
             smallButton("打开脚本目录", action: #selector(openScripts))
@@ -645,6 +645,15 @@ final class SettingsViewController: NSViewController, NSUserInterfaceValidations
         return SettingsCardView(content: stack)
     }
 
+    private func reorderCard(_ rows: [NSView], ids: [String], group: String) -> NSView {
+        guard !ids.isEmpty, rows.count == ids.count else { return card(rows) }
+        let list = ReorderListView(rows: rows, ids: ids) { [weak self] reordered in
+            guard let self, self.store.reorder(group: group, ids: reordered) else { return }
+            self.announce("列表顺序已更新。")
+        }
+        return SettingsCardView(content: list)
+    }
+
     private func rowContainer(height: CGFloat, icon: NSImageView, text: NSStackView,
                               trailing: NSView?) -> NSView {
         let row = NSView()
@@ -679,7 +688,7 @@ final class SettingsViewController: NSViewController, NSUserInterfaceValidations
     private func appRow(_ action: ActionDefinition) -> NSView {
         let row = NSView()
         row.translatesAutoresizingMaskIntoConstraints = false
-        row.heightAnchor.constraint(greaterThanOrEqualToConstant: 41).isActive = true
+        row.heightAnchor.constraint(greaterThanOrEqualToConstant: 40).isActive = true
 
         let icon = NSImageView()
         icon.imageScaling = .scaleProportionallyUpOrDown
@@ -691,7 +700,7 @@ final class SettingsViewController: NSViewController, NSUserInterfaceValidations
         }
 
         let name = NSTextField(labelWithString: action.title)
-        name.font = settingsFont(.body, weight: .medium)
+        name.font = .systemFont(ofSize: NSFont.systemFontSize)
         name.lineBreakMode = .byTruncatingTail
         name.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         name.translatesAutoresizingMaskIntoConstraints = false
@@ -745,7 +754,7 @@ final class SettingsViewController: NSViewController, NSUserInterfaceValidations
         remove.tag = index
         remove.identifier = NSUserInterfaceItemIdentifier("remove." + destination.id)
         return listRow(title: destination.name, detail: destination.path,
-            symbol: "folder", tint: .systemIndigo, trailing: [toggle, remove], enabled: enabled)
+            symbol: "folder", tint: .systemIndigo, trailing: [toggle, remove], enabled: enabled, compact: true)
     }
 
     private func copyRow(_ target: CopyTarget, action: ActionDefinition) -> NSView {
@@ -762,7 +771,7 @@ final class SettingsViewController: NSViewController, NSUserInterfaceValidations
             trailing.append(remove)
         }
         return listRow(title: action.title, detail: target.path ?? "每次点击后选择目标文件夹",
-            symbol: "doc.on.doc", tint: .systemBlue, trailing: trailing, enabled: enabled)
+            symbol: "doc.on.doc", tint: .systemBlue, trailing: trailing, enabled: enabled, compact: true)
     }
 
     private func sendRow(_ action: ActionDefinition) -> NSView {
@@ -776,14 +785,14 @@ final class SettingsViewController: NSViewController, NSUserInterfaceValidations
         remove.identifier = NSUserInterfaceItemIdentifier("remove." + action.id)
         return listRow(title: action.title, detail: scriptPath(for: action),
             symbol: action.icon ?? "paperplane", tint: .systemGreen,
-            trailing: [toggle, edit, reveal, remove], enabled: enabled)
+            trailing: [toggle, edit, reveal, remove], enabled: enabled, compact: true)
     }
 
     private func listRow(title: String, detail: String?, symbol: String, tint: NSColor,
-                         trailing: [NSControl], enabled: Bool = true) -> NSView {
+                         trailing: [NSControl], enabled: Bool = true, compact: Bool = false) -> NSView {
         let row = NSView()
         row.translatesAutoresizingMaskIntoConstraints = false
-        row.heightAnchor.constraint(greaterThanOrEqualToConstant: 41).isActive = true
+        row.heightAnchor.constraint(greaterThanOrEqualToConstant: compact ? 40 : 41).isActive = true
 
         let icon = NSImageView()
         icon.translatesAutoresizingMaskIntoConstraints = false
@@ -792,7 +801,7 @@ final class SettingsViewController: NSViewController, NSUserInterfaceValidations
         icon.imageScaling = .scaleProportionallyUpOrDown
 
         let titleLabel = NSTextField(labelWithString: title)
-        titleLabel.font = settingsFont(.body, weight: .medium)
+        titleLabel.font = compact ? .systemFont(ofSize: NSFont.systemFontSize) : settingsFont(.body, weight: .medium)
         titleLabel.lineBreakMode = .byTruncatingTail
         titleLabel.textColor = enabled ? .labelColor : .secondaryLabelColor
         titleLabel.toolTip = title
@@ -804,7 +813,8 @@ final class SettingsViewController: NSViewController, NSUserInterfaceValidations
         textStack.alignment = .leading
         textStack.spacing = 1
         textStack.translatesAutoresizingMaskIntoConstraints = false
-        if let detail {
+        if let detail, compact { titleLabel.toolTip = "\(title)\n\(detail)" }
+        if let detail, !compact {
             let detailLabel = NSTextField(labelWithString: (detail as NSString).abbreviatingWithTildeInPath)
             detailLabel.font = settingsFont(.subheadline)
             detailLabel.textColor = .secondaryLabelColor
@@ -1236,4 +1246,158 @@ private final class SettingsCardView: NSView {
         super.viewDidChangeEffectiveAppearance()
         needsDisplay = true
     }
+}
+
+private final class ReorderListView: NSStackView {
+    let ids: [String]
+    let onReorder: ([String]) -> Void
+
+    init(rows: [NSView], ids: [String], onReorder: @escaping ([String]) -> Void) {
+        self.ids = ids
+        self.onReorder = onReorder
+        super.init(frame: .zero)
+        orientation = .vertical
+        alignment = .leading
+        spacing = 0
+        translatesAutoresizingMaskIntoConstraints = false
+        for (index, row) in rows.enumerated() {
+            let item = ReorderRowView(content: row, index: index, list: self)
+            addArrangedSubview(item)
+            item.widthAnchor.constraint(equalTo: widthAnchor).isActive = true
+            if index < rows.count - 1 {
+                let separator = NSBox()
+                separator.boxType = .separator
+                separator.translatesAutoresizingMaskIntoConstraints = false
+                addArrangedSubview(separator)
+                separator.widthAnchor.constraint(equalTo: widthAnchor).isActive = true
+                separator.heightAnchor.constraint(equalToConstant: 1).isActive = true
+            }
+        }
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+}
+
+private final class ReorderRowView: NSView {
+    private let index: Int
+    private weak var list: ReorderListView?
+    private var dragStart: NSPoint?
+    private var insertionAbove: Bool?
+    private var dragPreview: NSImageView?
+    private var previewOrigin: NSPoint = .zero
+    private weak var dropRow: ReorderRowView?
+    private var dragMonitor: Any?
+
+    init(content: NSView, index: Int, list: ReorderListView) {
+        self.index = index
+        self.list = list
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        addSubview(content)
+        NSLayoutConstraint.activate([
+            content.leadingAnchor.constraint(equalTo: leadingAnchor),
+            content.trailingAnchor.constraint(equalTo: trailingAnchor),
+            content.topAnchor.constraint(equalTo: topAnchor),
+            content.bottomAnchor.constraint(equalTo: bottomAnchor)
+        ])
+        setAccessibilityHelp("拖动以调整顺序")
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard let hit = super.hitTest(point) else { return nil }
+        var current: NSView? = hit
+        while let view = current, view !== self {
+            if view is NSButton || view is NSSwitch { return hit }
+            current = view.superview
+        }
+        return self
+    }
+
+    override func mouseDown(with event: NSEvent) { dragStart = event.locationInWindow }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let start = dragStart, let list, let container = window?.contentView else { return }
+        let currentPoint = container.convert(event.locationInWindow, from: nil)
+        let startPoint = container.convert(start, from: nil)
+        let delta = NSPoint(x: currentPoint.x - startPoint.x, y: currentPoint.y - startPoint.y)
+        if dragPreview == nil {
+            guard hypot(delta.x, delta.y) > 4, let image = bitmapImageRepForCachingDisplay(in: bounds) else { return }
+            cacheDisplay(in: bounds, to: image)
+            let rowImage = NSImage(size: bounds.size)
+            rowImage.addRepresentation(image)
+            let preview = NSImage(size: bounds.size)
+            preview.lockFocus()
+            NSColor.selectedContentBackgroundColor.withAlphaComponent(0.3).setFill()
+            NSBezierPath(roundedRect: bounds, xRadius: 6, yRadius: 6).fill()
+            rowImage.draw(in: bounds)
+            preview.unlockFocus()
+            let imageView = DragPreviewView(image: preview)
+            imageView.imageScaling = .scaleNone
+            previewOrigin = convert(bounds, to: container).origin
+            imageView.frame = NSRect(origin: previewOrigin, size: bounds.size)
+            container.addSubview(imageView, positioned: .above, relativeTo: nil)
+            dragPreview = imageView
+            alphaValue = 0.45
+            dragMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseUp, .keyDown]) { [weak self] event in
+                if event.type == .leftMouseUp {
+                    self?.finishDrag(cancelled: false)
+                    return nil
+                }
+                if event.keyCode == 53 {
+                    self?.finishDrag(cancelled: true)
+                    return nil
+                }
+                return event
+            }
+        }
+        dragPreview?.frame.origin = NSPoint(x: previewOrigin.x + delta.x, y: previewOrigin.y + delta.y)
+        let location = list.convert(event.locationInWindow, from: nil)
+        let target = list.arrangedSubviews.compactMap { $0 as? ReorderRowView }.first { $0.frame.contains(location) }
+        dropRow?.insertionAbove = nil
+        dropRow?.needsDisplay = true
+        dropRow = target === self ? nil : target
+        if let target = dropRow {
+            target.insertionAbove = target.convert(event.locationInWindow, from: nil).y > target.bounds.midY
+            target.needsDisplay = true
+        }
+    }
+
+    override func mouseUp(with event: NSEvent) { finishDrag(cancelled: false) }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if newWindow == nil { finishDrag(cancelled: true) }
+        super.viewWillMove(toWindow: newWindow)
+    }
+
+    private func finishDrag(cancelled: Bool) {
+        if let monitor = dragMonitor { NSEvent.removeMonitor(monitor); dragMonitor = nil }
+        dragPreview?.removeFromSuperview()
+        dragPreview = nil
+        alphaValue = 1
+        dragStart = nil
+        guard let target = dropRow, let above = target.insertionAbove else { return }
+        target.insertionAbove = nil
+        target.needsDisplay = true
+        dropRow = nil
+        guard !cancelled, let list else { return }
+        var ids = list.ids
+        let moved = ids.remove(at: index)
+        var destination = target.index + (above ? 0 : 1)
+        if index < destination { destination -= 1 }
+        ids.insert(moved, at: destination)
+        list.onReorder(ids)
+    }
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        if let above = insertionAbove {
+            NSColor.controlAccentColor.setFill()
+            NSRect(x: 0, y: above ? bounds.height - 2 : 0, width: bounds.width, height: 2).fill()
+        }
+    }
+}
+
+private final class DragPreviewView: NSImageView {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
