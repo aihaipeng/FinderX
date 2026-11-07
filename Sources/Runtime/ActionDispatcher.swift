@@ -44,7 +44,8 @@ final class ActionDispatcher {
                 result = ExecutionResult(requestID: invocation.requestID, actionID: invocation.actionID, title: "FinderX",
                     startedAt: started, finishedAt: Date(), status: .failed,
                     jobs: [JobResult(targets: invocation.context.targets.map(\.path), status: .failed,
-                        errorCode: (error as? FrameworkError)?.code ?? "action.failed", message: error.localizedDescription)])
+                        errorCode: (error as? FrameworkError)?.code ?? "action.failed", message: error.localizedDescription)],
+                    requestedCount: invocation.context.targets.count)
             }
             lock.lock(); tokens.removeValue(forKey: invocation.requestID); lock.unlock()
             DispatchQueue.main.async { completion(result) }
@@ -76,8 +77,10 @@ final class ActionDispatcher {
         else if cancellation.isCancelled || results.last?.status == .cancelled { status = .cancelled }
         else if results.contains(where: { $0.status == .failed }) {
             status = results.contains(where: { $0.status == .succeeded }) ? .partiallySucceeded : .failed
-        } else { status = .succeeded }
+        } else if !results.isEmpty && results.allSatisfy({ $0.status == .skipped }) { status = .skipped }
+        else { status = .succeeded }
         return ExecutionResult(requestID: plan.requestID, actionID: plan.actionID, title: plan.title,
-            startedAt: startedAt, finishedAt: Date(), status: status, jobs: results)
+            startedAt: startedAt, finishedAt: Date(), status: status, jobs: results,
+            requestedCount: plan.jobs.reduce(0) { $0 + $1.targets.count })
     }
 }

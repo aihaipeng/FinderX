@@ -78,13 +78,13 @@ done
 
 | 类型 | 字段 |
 | --- | --- |
-| group | 必填 type/id/title/children；可选 icon |
+| group | 必填 type/id/title/children；可选 icon/showWhenEmpty |
 | action | 必填 type/id/actionID；可选 title/icon，用于覆盖动作展示字段 |
 | separator | 仅 type/id |
 
-数组顺序就是显示顺序。同一动作可被不同菜单节点引用。未知引用、重复 ID、未知字段和枚举均为错误。
+数组顺序就是显示顺序。同一动作可被不同菜单节点引用。未知引用、重复 ID、未知字段和枚举均为错误。空分组默认不显示；分组设置 `"showWhenEmpty": true` 后，即使没有可用子项也会保留并显示带禁用占位项的子菜单。
 
-“添加打开方式”与“添加自定义脚本”会在 `menu.finderx` 中创建或复用 `menu.open-with/menu.custom` 分组。移动目标管理使用 `menu.move`，修改这个分组 ID 后，应自行管理移动动作或恢复该 ID。
+“添加打开方式”与“添加自定义脚本”会在 `menu.finderx` 中创建或复用 `menu.open-with/menu.custom` 分组。默认配置已包含 `menu.open-with`（打开方式）分组，因此它始终可见；添加的应用会追加到该分组。移动目标管理使用 `menu.move`，修改这个分组 ID 后，应自行管理移动动作或恢复该 ID。
 
 ## 4. command 执行定义
 

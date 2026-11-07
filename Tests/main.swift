@@ -46,11 +46,87 @@ func runScript(_ name: String, _ arguments: [String]) -> JobResult {
     processRunner.run(command("/bin/zsh", [library.scripts.appendingPathComponent(name + ".zsh").path] + arguments))
 }
 
-test("default configuration round trip and six script presets") {
+test("default configuration round trip and script presets") {
     let decoded = try ConfigurationCodec.decode(ConfigurationCodec.encode(defaults))
-    try expect(decoded.actions.filter { $0.execution.type == .command }.count == 8, "six actions plus three destination scripts expected")
+    try expect(decoded.actions.filter { $0.execution.type == .command }.count == 9, "six script actions plus three destination scripts expected")
     try expect(decoded.actions.filter { $0.execution.type == .builtin }.allSatisfy { $0.id == "app.add-destination" }, "file features must run scripts")
     for action in decoded.actions where action.execution.type == .command { try builder.checkDependencies(action.execution) }
+}
+test("copy-to uses one command for mixed selections and an editable destination") {
+    let action = defaults.actions.first { $0.id == "files.copy-to" }!
+    let mixed = ActionContext.capture(surface: .items, selection: [file, folder], container: folder)
+    let plan = try builder.build(action: action, context: mixed)
+    try expect(plan.jobs.count == 1 && action.batchMode == .all, "directory chooser would repeat per file")
+    guard case .command(let job) = plan.jobs[0].payload else { throw TestFailure(description: "copy must be a script") }
+    try expect(job.arguments.suffix(3) == ["--choose", file.path, folder.path], "selection arguments changed")
+    try expect(job.timeout == 600, "interactive copy needs its declared timeout")
+    var configured = action
+    configured.execution.arguments?[1] = Template.literal(folder.path)
+    try ConfigurationCodec.validate(FrameworkConfiguration(schemaVersion: 1, actions: [configured], menu: [DefaultConfiguration.reference(configured.id)]))
+}
+test("copy-to upgrade backs up exact config once and preserves later customization") {
+    var previous = defaults
+    previous.actions.removeAll { $0.id == "files.copy-to" }
+    previous.menu[0].children?.removeAll { $0.actionID == "files.copy-to" }
+    previous.menu[0].title = "我的菜单"
+    previous.actions[0].title = "我的终端"
+    let directory = root.appendingPathComponent("copy-upgrade")
+    try fm.createDirectory(at: directory, withIntermediateDirectories: true)
+    let url = directory.appendingPathComponent("config.json")
+    let original = try ConfigurationCodec.encode(previous)
+    try original.write(to: url)
+    let readOnly = ConfigurationRepository(url: url, home: home.path, writable: false)
+    try expect(try readOnly.load().configuration.actions.count == previous.actions.count, "extension must not migrate")
+    try expect(try Data(contentsOf: url) == original, "read-only load rewrote config")
+    let repo = ConfigurationRepository(url: url, home: home.path, writable: true)
+    let upgraded = try repo.load()
+    try expect(repo.lastError == nil && upgraded.action("files.copy-to") != nil, "existing config not upgraded")
+    try expect(upgraded.configuration.menu[0].children?.contains { $0.actionID == "files.copy-to" } == true, "copy menu missing")
+    try expect(upgraded.configuration.menu[0].title == "我的菜单" && upgraded.action("open.terminal")?.title == "我的终端", "customizations changed")
+    try expect(try Data(contentsOf: directory.appendingPathComponent("config.before-copy-to.json")) == original, "backup changed")
+    try expect(try repo.load().revision == upgraded.revision, "upgrade duplicated action")
+    try repo.save(previous)
+    let restarted = ConfigurationRepository(url: url, home: home.path, writable: true)
+    try expect(try restarted.load().action("files.copy-to") == nil, "deleted action was restored")
+    let custom = directory.appendingPathComponent("custom/config.json")
+    let customRepo = ConfigurationRepository(url: custom, home: home.path, writable: true)
+    var alreadyCustomized = defaults
+    alreadyCustomized.actions[alreadyCustomized.actions.count - 1].title = "自定义拷贝"
+    try customRepo.save(alreadyCustomized)
+    try expect(try customRepo.load().action("files.copy-to")?.title == "自定义拷贝", "existing copy action overwritten")
+    var withoutRoot = previous
+    withoutRoot.menu = [DefaultConfiguration.reference("open.terminal")]
+    let fallback = DefaultConfiguration.addingCopyTo(withoutRoot)
+    try ConfigurationCodec.validate(fallback)
+    try expect(fallback.menu.last?.actionID == "files.copy-to", "custom root prevented copy menu installation")
+}
+test("open-with group stays visible when empty and is added once to existing config") {
+    let snapshot = try ConfigurationCodec.snapshot(defaults)
+    func flatten(_ nodes: [MenuModel]) -> [MenuModel] { nodes.flatMap { [$0] + flatten($0.children) } }
+    let group = flatten(MenuBuilder.build(snapshot: snapshot, context: context)).first { $0.title == "打开方式" }
+    try expect(group?.type == .group && group?.children.isEmpty == true, "empty open-with group was hidden")
+
+    var previous = defaults
+    previous.menu[0].children?.removeAll { $0.id == "menu.open-with" }
+    previous.menu[0].title = "我的菜单"
+    var emptyGroup = previous
+    emptyGroup.menu[0].children?.insert(MenuDefinition(type: .group, id: "menu.open-with", title: "打开方式", children: []), at: 3)
+    let upgradedEmpty = DefaultConfiguration.addingOpenWith(emptyGroup)
+    try expect(upgradedEmpty.menu[0].children?.first { $0.id == "menu.open-with" }?.showWhenEmpty == true, "existing empty group not upgraded")
+    let directory = root.appendingPathComponent("open-with-upgrade")
+    try fm.createDirectory(at: directory, withIntermediateDirectories: true)
+    let url = directory.appendingPathComponent("config.json")
+    try ConfigurationCodec.encode(previous).write(to: url)
+    let repo = ConfigurationRepository(url: url, home: home.path, writable: true)
+    let upgraded = try repo.load()
+    let inserted = upgraded.configuration.menu[0].children?.first { $0.id == "menu.open-with" }
+    try expect(inserted?.showWhenEmpty == true && upgraded.configuration.menu[0].title == "我的菜单", "open-with group migration failed")
+    try expect(try repo.load().revision == upgraded.revision, "open-with migration duplicated")
+    var removed = upgraded.configuration
+    removed.menu[0].children?.removeAll { $0.id == "menu.open-with" }
+    try repo.save(removed)
+    let restarted = ConfigurationRepository(url: url, home: home.path, writable: true)
+    try expect(try restarted.load().configuration.menu[0].children?.contains { $0.id == "menu.open-with" } == false, "deleted open-with group was restored")
 }
 test("strict fields, references, versions and templates") {
     _ = try ConfigurationCodec.decode(Data(contentsOf: resources.deletingLastPathComponent().appendingPathComponent("docs/examples/framework-v1.json")))
@@ -67,6 +143,8 @@ test("strict fields, references, versions and templates") {
     try rejects { try ConfigurationCodec.validate(config) }
     config.actions[0].batch = .each
     try ConfigurationCodec.validate(config)
+    config.menu = [MenuDefinition(type: .action, id: "bad", actionID: "open.terminal", showWhenEmpty: true)]
+    try rejects { try ConfigurationCodec.validate(config) }
     config.menu = [MenuDefinition(type: .action, id: "broken", actionID: "missing")]
     try rejects { try ConfigurationCodec.validate(config) }
 }
@@ -90,6 +168,7 @@ test("literal arguments, Unicode, quotes and braces") {
 }
 test("menu pruning and unavailable dependencies") {
     var config = defaults
+    config.menu[0].children?.removeAll { $0.id == "menu.open-with" }
     for index in config.actions.indices { config.actions[index].enabled = false }
     let snapshot = try ConfigurationCodec.snapshot(config)
     try expect(MenuBuilder.build(snapshot: snapshot, context: context).isEmpty, "empty groups should disappear")
@@ -185,6 +264,91 @@ test("timeout and cancellation terminate script descendants") {
     let cancelled = processRunner.run(command("/bin/sleep", ["30"]), cancellation: token)
     try expect(cancelled.status == .cancelled, "cancellation not reported")
 }
+test("copy-to preserves sources, directory contents, links, metadata and occupied paths") {
+    let source = root.appendingPathComponent("copy-source")
+    let destination = root.appendingPathComponent("copy-target")
+    try fm.createDirectory(at: source.appendingPathComponent("nested"), withIntermediateDirectories: true)
+    try fm.createDirectory(at: destination, withIntermediateDirectories: true)
+    let nested = source.appendingPathComponent("nested/.hidden")
+    try Data("nested contents".utf8).write(to: nested)
+    try fm.setAttributes([.posixPermissions: 0o751], ofItemAtPath: nested.path)
+    let metadata = processRunner.run(command("/usr/bin/xattr", ["-w", "com.finderx.test", "metadata", nested.path]))
+    try expect(metadata.status == .succeeded, metadata.stderr)
+    try fm.createSymbolicLink(atPath: source.appendingPathComponent("nested/link").path, withDestinationPath: ".hidden")
+    let dangling = root.appendingPathComponent("copy-dangling")
+    try fm.createSymbolicLink(atPath: dangling.path, withDestinationPath: "/nonexistent/finderx-copy")
+    let directoryLink = root.appendingPathComponent("copy-directory-link")
+    try fm.createSymbolicLink(at: directoryLink, withDestinationURL: source)
+    let occupied = destination.appendingPathComponent(file.lastPathComponent)
+    try fm.createDirectory(at: occupied, withIntermediateDirectories: false)
+    try fm.createSymbolicLink(atPath: occupied.path + " 2", withDestinationPath: "/nonexistent/finderx-copy")
+    let result = runScript("copy-to", [destination.path, file.path, source.path, dangling.path, directoryLink.path])
+    try expect(result.status == .succeeded, result.message ?? result.stderr)
+    try expect(try Data(contentsOf: URL(fileURLWithPath: occupied.path + " 3")) == Data(contentsOf: file), "literal filename or contents changed")
+    try expect(try fm.contentsOfDirectory(atPath: occupied.path).isEmpty, "copy nested inside occupied directory")
+    let copied = destination.appendingPathComponent("copy-source/nested/.hidden")
+    try expect(try Data(contentsOf: copied) == Data(contentsOf: nested), "nested hidden file lost")
+    try expect(try fm.attributesOfItem(atPath: copied.path)[.posixPermissions] as? Int == 0o751, "file permissions lost")
+    let copiedMetadata = processRunner.run(command("/usr/bin/xattr", ["-p", "com.finderx.test", copied.path]))
+    try expect(copiedMetadata.status == .succeeded && copiedMetadata.stdout == "metadata\n", "extended attribute lost")
+    try expect(try fm.destinationOfSymbolicLink(atPath: destination.appendingPathComponent("copy-source/nested/link").path) == ".hidden", "nested symlink dereferenced")
+    try expect(try fm.destinationOfSymbolicLink(atPath: destination.appendingPathComponent("copy-dangling").path) == "/nonexistent/finderx-copy", "dangling link not copied")
+    try expect(try fm.destinationOfSymbolicLink(atPath: destination.appendingPathComponent("copy-directory-link").path) == source.path, "directory link dereferenced")
+    try expect(fm.fileExists(atPath: file.path) && fm.fileExists(atPath: nested.path), "source changed")
+    try expect(try fm.contentsOfDirectory(atPath: destination.path).allSatisfy { !$0.hasPrefix(".finderx-copy.") }, "staging directory leaked")
+    let sameDirectory = runScript("copy-to", [folder.path, file.path])
+    try expect(sameDirectory.status == .succeeded && fm.fileExists(atPath: file.path + " 2"), "same-directory file copy failed")
+    let repeated = runScript("copy-to", [destination.path, source.path + "/"])
+    try expect(repeated.status == .succeeded && fm.fileExists(atPath: destination.appendingPathComponent("copy-source 2/nested/.hidden").path), "directory collision merged or trailing slash changed copy semantics")
+}
+test("copy-to cancellation and timeout clean up partial staging copies") {
+    let source = root.appendingPathComponent("copy-cancel-source")
+    let destination = root.appendingPathComponent("copy-cancel-target")
+    try fm.createDirectory(at: source, withIntermediateDirectories: true)
+    try fm.createDirectory(at: destination, withIntermediateDirectories: true)
+    for index in 0..<4000 { try Data(repeating: 120, count: 1024).write(to: source.appendingPathComponent("file-\(index)")) }
+    let token = CancellationToken()
+    let monitor = DispatchGroup()
+    monitor.enter()
+    DispatchQueue.global().async {
+        defer { monitor.leave() }
+        let deadline = Date(timeIntervalSinceNow: 5)
+        while !token.isCancelled && Date() < deadline {
+            if let stage = (try? fm.contentsOfDirectory(at: destination, includingPropertiesForKeys: nil))?.first(where: { $0.lastPathComponent.hasPrefix(".finderx-copy.") }),
+               (try? fm.contentsOfDirectory(atPath: stage.appendingPathComponent("payload").path).count) ?? 0 > 10 {
+                token.cancel()
+                return
+            }
+            Thread.sleep(forTimeInterval: 0.001)
+        }
+    }
+    let arguments = [library.scripts.appendingPathComponent("copy-to.zsh").path, destination.path, source.path]
+    let cancelled = processRunner.run(command("/bin/zsh", arguments, timeout: 10), cancellation: token)
+    token.cancel()
+    monitor.wait()
+    try expect(cancelled.status == .cancelled, "copy completed before cancellation was exercised")
+    try expect(try fm.contentsOfDirectory(atPath: destination.path).isEmpty, "cancelled copy left partial staging data")
+    let timedOut = processRunner.run(command("/bin/zsh", arguments, timeout: 0.05))
+    try expect(timedOut.status == .timedOut, "copy timeout not exercised")
+    try expect(try fm.contentsOfDirectory(atPath: destination.path).isEmpty, "timed out copy left partial staging data")
+    try expect(try fm.contentsOfDirectory(atPath: source.path).count == 4000, "cancellation damaged source files")
+}
+test("copy-to rejects missing paths, self and descendant destinations including aliases") {
+    let source = root.appendingPathComponent("copy-invalid")
+    let child = source.appendingPathComponent("child")
+    try fm.createDirectory(at: child, withIntermediateDirectories: true)
+    let alias = root.appendingPathComponent("copy-alias")
+    try fm.createSymbolicLink(at: alias, withDestinationURL: child)
+    for destination in [source.path, child.path, alias.path] {
+        let result = runScript("copy-to", [destination, source.path])
+        try expect(result.status == .failed && result.stderr.contains("自身"), "recursive copy allowed: " + destination)
+    }
+    try expect(runScript("copy-to", [child.path, "/"]).status == .failed, "root copy allowed")
+    try expect(runScript("copy-to", [source.appendingPathComponent("missing").path, file.path]).status == .failed, "missing destination accepted")
+    let invalidBatch = runScript("copy-to", [child.path, file.path, source.appendingPathComponent("missing").path])
+    try expect(invalidBatch.status == .failed && (try fm.contentsOfDirectory(atPath: child.path)).isEmpty, "invalid batch created partial files")
+    try expect(runScript("copy-to", [child.path]).status == .failed, "empty source list accepted")
+}
 test("move script collision, no-op, descendant check and literal filenames") {
     let destination = root.appendingPathComponent("move-target")
     try fm.createDirectory(at: destination, withIntermediateDirectories: true)
@@ -196,7 +360,7 @@ test("move script collision, no-op, descendant check and literal filenames") {
     try expect(fm.fileExists(atPath: moved.path) && !fm.fileExists(atPath: file.path), "source not moved to suffix")
     try expect(try String(contentsOf: occupied, encoding: .utf8) == "occupied", "existing file overwritten")
     let noop = runScript("move", [destination.path, moved.path])
-    try expect(noop.status == .succeeded && noop.stdout.contains("已跳过"), "same-directory move not skipped")
+    try expect(noop.status == .skipped && noop.stdout.contains("已跳过"), "same-directory move not reported as skipped")
     let child = folder.appendingPathComponent("child")
     try fm.createDirectory(at: child, withIntermediateDirectories: true)
     let invalid = runScript("move", [child.path, folder.path])
@@ -223,6 +387,23 @@ test("script library preserves user edits across installs") {
     try Data("# user edit\n".utf8).write(to: script)
     try library.install(from: resources)
     try expect(try String(contentsOf: script, encoding: .utf8) == "# user edit\n", "user script overwritten")
+}
+test("default scripts migrate exit codes once without restoring deleted files") {
+    let directory = root.appendingPathComponent("script-migration")
+    let migration = ScriptLibrary(directory: directory)
+    try fm.createDirectory(at: migration.scripts, withIntermediateDirectories: true)
+    let copyTo = migration.scripts.appendingPathComponent("copy-to.zsh")
+    let move = migration.scripts.appendingPathComponent("move.zsh")
+    try Data("#!/bin/zsh\n  [[ -n \"$destination\" ]] || { print -r -- '已取消拷贝。'; exit 0; }\n".utf8).write(to: copyTo)
+    try Data("#!/bin/zsh\nif true; then\n  print -r -- '已跳过：已经位于目标目录。'\n  exit 0\nfi\n".utf8).write(to: move)
+    try migration.migrateDefaultExitCodes()
+    try expect(try String(contentsOf: copyTo, encoding: .utf8).contains("exit 130"), "copy-to exit code not migrated")
+    try expect(try String(contentsOf: move, encoding: .utf8).contains("exit 100"), "move exit code not migrated")
+    try Data("#!/bin/zsh\nexit 0\n".utf8).write(to: copyTo)
+    try fm.removeItem(at: move)
+    try migration.migrateDefaultExitCodes()
+    try expect(try String(contentsOf: copyTo, encoding: .utf8) == "#!/bin/zsh\nexit 0\n", "second migration overwrote user script")
+    try expect(!fm.fileExists(atPath: move.path), "second migration restored deleted script")
 }
 test("FinderX imports legacy configuration and preserves user scripts once") {
     let old = root.appendingPathComponent("legacy-brand")
@@ -295,6 +476,89 @@ test("stale configuration rejected and duplicate invocation executes once") {
     dispatcher.submit(Invocation(actionID: "test", revision: "outdated", context: context)) { outputs.append($0) }
     while outputs.count < 2 && Date() < deadline { RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.02)) }
     try expect(outputs.count == 2 && outputs[1].jobs[0].errorCode == "config.changed", "stale configuration executed")
+}
+
+test("script exit conventions distinguish cancellation and skips") {
+    let cancelled = processRunner.run(command("/bin/zsh", ["-c", "exit 130"]))
+    let skipped = processRunner.run(command("/bin/zsh", ["-c", "exit 100"]))
+    let failed = processRunner.run(command("/bin/zsh", ["-c", "exit 1"]))
+    try expect(cancelled.status == .cancelled && cancelled.errorCode == "process.cancelled", "exit 130 not cancelled")
+    try expect(skipped.status == .skipped && skipped.errorCode == nil, "exit 100 not skipped")
+    try expect(failed.status == .failed, "exit 1 not failed")
+}
+test("result summary reports targets, skips and unprocessed items") {
+    let first = home.appendingPathComponent("first").path
+    let second = home.appendingPathComponent("second").path
+    let result = ExecutionResult(requestID: UUID(), actionID: "test", title: "移动",
+        startedAt: Date(), finishedAt: Date(), status: .partiallySucceeded,
+        jobs: [
+            JobResult(targets: [first], status: .succeeded, stdout: "完成"),
+            JobResult(targets: [second], status: .skipped, stdout: "已跳过")
+        ], requestedCount: 3)
+    let summary = result.summary
+    for expected in ["完成 1", "跳过 1", "未执行 1", first, second] {
+        try expect(summary.contains(expected), "summary missing \(expected): \(summary)")
+    }
+    let longJobs = (0..<5).map {
+        JobResult(targets: [home.appendingPathComponent("item-\($0)").path], status: .succeeded,
+            stdout: String(repeating: "x", count: 2048))
+    }
+    let truncated = ExecutionResult(requestID: UUID(), actionID: "test", title: "测试",
+        startedAt: Date(), finishedAt: Date(), status: .succeeded, jobs: longJobs, requestedCount: 5)
+    try expect(truncated.summary.contains("结果已截断"), "summary truncation is not disclosed")
+}
+test("all skipped jobs produce skipped overall status") {
+    let registry = BuiltinRegistry()
+    let dispatcher = ActionDispatcher(repository: ConfigurationRepository(url: root.appendingPathComponent("unused-skip"), home: home.path, writable: false), builder: builder, builtins: registry)
+    let first = ExecutionJob(targets: [], payload: .command(command("/bin/zsh", ["-c", "exit 100"])))
+    let second = ExecutionJob(targets: [], payload: .command(command("/bin/zsh", ["-c", "exit 100"])))
+    let result = dispatcher.execute(ExecutionPlan(requestID: UUID(), actionID: "test", title: "test", onError: .continue, jobs: [first, second]))
+    try expect(result.status == .skipped && result.jobs.allSatisfy { $0.status == .skipped }, "skipped jobs reported as success")
+}
+test("dependency reasons expose short visible labels") {
+    try expect(DependencyAvailability.shortReason("找不到应用：/Applications/LocalSend.app。请安装应用或选择正确路径。") == "应用未安装", "application reason")
+    try expect(DependencyAvailability.shortReason("找不到依赖文件：/tmp/script.zsh") == "脚本缺失", "script reason")
+    try expect(DependencyAvailability.shortReason("请等待主程序检查脚本依赖，稍后重新打开菜单。") == "正在检查依赖", "wait reason")
+}
+
+test("settings navigation history branches and ignores repeated selections") {
+    let navigation = SettingsNavigation()
+    var changes = 0
+    navigation.onSelection = { changes += 1 }
+    navigation.goBack()
+    navigation.goForward()
+    try expect(!navigation.canGoBack && !navigation.canGoForward, "initial history")
+    navigation.select(.openWith)
+    navigation.select(.scripts)
+    navigation.goBack()
+    try expect(navigation.section == .openWith && navigation.canGoForward, "back visit")
+    navigation.select(.destinations)
+    try expect(!navigation.canGoForward, "new visit must discard forward history")
+    navigation.select(.destinations)
+    navigation.goBack()
+    try expect(navigation.section == .openWith, "duplicate visit added to history")
+    navigation.goBack()
+    navigation.goBack()
+    try expect(navigation.section == .status && !navigation.canGoBack, "history boundary")
+    navigation.goForward()
+    try expect(navigation.section == .openWith && changes == 7, "forward visit and detail callbacks")
+}
+test("settings search trims whitespace and matches page titles and keywords") {
+    try expect(SettingsSection.matching("  ") == SettingsSection.allCases, "blank search")
+    try expect(SettingsSection.matching("app") == [.openWith], "case-insensitive keyword")
+    try expect(SettingsSection.matching(" 自定义 ") == [.scripts], "trimmed page title")
+    try expect(SettingsSection.matching("Finder") == [.status, .advanced], "multiple results retain sidebar order")
+    try expect(SettingsSection.matching("no-such-page").isEmpty, "no search results")
+}
+
+test("settings search groups keyword suggestions and ranks matching page titles first") {
+    let rows = SettingsSection.searchRows("配置")
+    try expect(rows.map(\.title) == ["状态", "配置", "高级", "配置文件"], "keyword rows and page headings")
+    try expect(rows.filter(\.selectable).map(\.title) == ["配置", "配置文件"], "nonmatching parent must not consume keyboard selection")
+    try expect(rows.map(\.id).count == Set(rows.map(\.id)).count, "search row identities")
+    try expect(SettingsSection.searchRows("高级").first?.selectable == true, "matching title is selectable")
+    try expect(SettingsSection.searchRows("Ａｐｐ").map(\.title) == ["打开方式", "App"], "fullwidth query normalization")
+    try expect(SettingsSection.searchRows("  ").isEmpty, "blank query uses normal sidebar")
 }
 
 print("\(passed) passed, \(failed) failed")

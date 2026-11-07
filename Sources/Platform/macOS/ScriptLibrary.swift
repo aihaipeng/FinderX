@@ -69,6 +69,29 @@ struct ScriptLibrary {
         }
     }
 
+    // One-time upgrade for the bundled defaults. User-edited scripts are left alone:
+    // only the exact published line is replaced, and a marker prevents a second pass.
+    func migrateDefaultExitCodes() throws {
+        let migrations: [(name: String, marker: String, from: String, to: String)] = [
+            ("copy-to.zsh", "script.copy-to-exit-codes-migrated",
+             "  [[ -n \"$destination\" ]] || { print -r -- '已取消拷贝。'; exit 0; }",
+             "  [[ -n \"$destination\" ]] || { print -r -- '已取消拷贝。'; exit 130; }"),
+            ("move.zsh", "script.move-skip-migrated",
+             "  print -r -- '已跳过：已经位于目标目录。'\n  exit 0",
+             "  print -r -- '已跳过：已经位于目标目录。'\n  exit 100")
+        ]
+        for migration in migrations {
+            let marker = directory.appendingPathComponent(migration.marker)
+            guard !FileManager.default.fileExists(atPath: marker.path) else { continue }
+            let script = scripts.appendingPathComponent(migration.name)
+            if let content = try? String(contentsOf: script, encoding: .utf8) {
+                let updated = content.replacingOccurrences(of: migration.from, with: migration.to)
+                if updated != content { try updated.write(to: script, atomically: true, encoding: .utf8) }
+            }
+            try Data().write(to: marker, options: .atomic)
+        }
+    }
+
     func create(id: String, body: String) throws -> URL {
         try FileManager.default.createDirectory(at: scripts, withIntermediateDirectories: true)
         let url = scripts.appendingPathComponent(id + ".zsh")

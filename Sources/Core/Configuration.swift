@@ -45,7 +45,7 @@ enum ConfigurationCodec {
                         let field = "\(path)[\(index)]"
                         let dictionary = item as? [String: Any] ?? [:]
                         let kind = dictionary["type"] as? String
-                        try keys(item, kind == "group" ? ["type", "id", "title", "icon", "children"]
+                        try keys(item, kind == "group" ? ["type", "id", "title", "icon", "children", "showWhenEmpty"]
                             : kind == "action" ? ["type", "id", "actionID", "title", "icon"] : ["type", "id"], field)
                         if let children = dictionary["children"] as? [Any], !children.isEmpty { try menu(children, field + ".children", depth + 1) }
                     }
@@ -136,6 +136,7 @@ enum ConfigurationCodec {
             for (index, node) in nodes.enumerated() {
                 let field = "\(path)[\(index)]"
                 guard !node.id.isEmpty, menuIDs.insert(node.id).inserted, menuIDs.count <= 512 else { throw invalid(field + ".id", "菜单 ID 为空、重复或节点超过 512。") }
+                if node.type != .group && node.showWhenEmpty != nil { throw invalid(field + ".showWhenEmpty", "仅分组支持 showWhenEmpty。") }
                 switch node.type {
                 case .group:
                     guard let title = node.title, !title.isEmpty, let children = node.children else { throw invalid(field, "分组需要名称和 children。") }
@@ -173,7 +174,7 @@ final class ConfigurationRepository {
 
     @discardableResult func load() throws -> ConfigurationSnapshot {
         do {
-            let configuration: FrameworkConfiguration
+            var configuration: FrameworkConfiguration
             if !FileManager.default.fileExists(atPath: url.path) {
                 if FileManager.default.fileExists(atPath: lastGoodURL.path) { throw FrameworkError(code: "config.missing", message: "配置文件缺失，已恢复上次有效快照；请恢复或编辑 config.json。") }
                 guard writable else { throw FrameworkError(code: "config.missing", message: "请先打开 FinderX 初始化配置。") }
@@ -192,6 +193,30 @@ final class ConfigurationRepository {
                     if !FileManager.default.fileExists(atPath: backup.path) { try data.write(to: backup, options: .atomic) }
                     try save(configuration)
                 } else { configuration = try ConfigurationCodec.decode(data) }
+            }
+            let migration = url.deletingLastPathComponent().appendingPathComponent("config.copy-to-migrated")
+            if writable && !FileManager.default.fileExists(atPath: migration.path) {
+                if !configuration.actions.contains(where: { $0.id == DefaultConfiguration.copyToAction.id }) {
+                    let upgraded = DefaultConfiguration.addingCopyTo(configuration)
+                    try ConfigurationCodec.validate(upgraded)
+                    let backup = url.deletingLastPathComponent().appendingPathComponent("config.before-copy-to.json")
+                    if !FileManager.default.fileExists(atPath: backup.path) {
+                        try Data(contentsOf: url).write(to: backup, options: .withoutOverwriting)
+                    }
+                    try save(upgraded)
+                    configuration = upgraded
+                }
+                try Data().write(to: migration, options: .atomic)
+            }
+            let openWithMigration = url.deletingLastPathComponent().appendingPathComponent("config.open-with-migrated")
+            if writable && !FileManager.default.fileExists(atPath: openWithMigration.path) {
+                if !DefaultConfiguration.hasOpenWith(configuration) {
+                    let upgraded = DefaultConfiguration.addingOpenWith(configuration)
+                    try ConfigurationCodec.validate(upgraded)
+                    try save(upgraded)
+                    configuration = upgraded
+                }
+                try Data().write(to: openWithMigration, options: .atomic)
             }
             let loaded = try ConfigurationCodec.snapshot(configuration)
             let changed = snapshot?.revision != loaded.revision

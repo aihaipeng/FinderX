@@ -11,4 +11,12 @@ struct DependencyAvailability: Codable {
             ($0.id, "请等待主程序检查脚本依赖，稍后重新打开菜单。")
         })
     }
+
+    static func shortReason(_ reason: String) -> String {
+        if reason.contains("找不到应用") { return "应用未安装" }
+        if reason.contains("找不到依赖文件") { return "脚本缺失" }
+        if reason.contains("命令不存在") { return "命令缺失" }
+        if reason.contains("请等待主程序检查") { return "正在检查依赖" }
+        return "不可用"
+    }
 }

@@ -17,5 +17,7 @@ enum SharedConfig {
     }
     static var configURLForExtension: URL { directoryForExtension.appendingPathComponent("config.json") }
     static var configURLForHost: URL { directoryForHost.appendingPathComponent("config.json") }
+    static var submissionErrorURLForExtension: URL { directoryForExtension.appendingPathComponent("last-submission-error.txt") }
+    static var submissionErrorURLForHost: URL { directoryForHost.appendingPathComponent("last-submission-error.txt") }
     static func displayName(for url: URL) -> String { FileManager.default.displayName(atPath: url.path) }
 }

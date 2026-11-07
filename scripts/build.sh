@@ -10,13 +10,14 @@ rm -rf "$BUILD"
 mkdir -p "$APP/Contents/MacOS" "$APPEX/Contents/MacOS"
 
 export MACOSX_DEPLOYMENT_TARGET=13.0
+TARGET="$(uname -m)-apple-macosx${MACOSX_DEPLOYMENT_TARGET}"
 SHARED_SOURCES=("$ROOT"/Sources/Core/*.swift "$ROOT"/Sources/Shared/*.swift)
 HOST_SOURCES=("$ROOT"/Sources/App/*.swift "$ROOT"/Sources/Runtime/*.swift "$ROOT"/Sources/Platform/macOS/*.swift "${SHARED_SOURCES[@]}")
 
-swiftc -O -o "$APP/Contents/MacOS/FinderX" "${HOST_SOURCES[@]}" \
+swiftc -target "$TARGET" -O -o "$APP/Contents/MacOS/FinderX" "${HOST_SOURCES[@]}" \
   -framework Cocoa -framework FinderSync
 
-swiftc -O -module-name FinderXFinder -emit-executable \
+swiftc -target "$TARGET" -O -module-name FinderXFinder -emit-executable \
   -o "$APPEX/Contents/MacOS/FinderXFinder" \
   "$ROOT/Sources/FinderExtension/FinderSync.swift" \
   "${SHARED_SOURCES[@]}" \

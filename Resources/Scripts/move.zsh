@@ -1,6 +1,7 @@
 #!/bin/zsh
 set -euo pipefail
 # Arguments: destination, one source. The framework invokes this once per source.
+# Exit 100 when the source is already in the destination.
 destination="$1"
 source="$2"
 [[ -d "$destination" ]] || { print -ru2 -- "目标文件夹不存在：$destination"; exit 1; }
@@ -9,7 +10,7 @@ real_destination=$(cd -- "$destination" && /bin/pwd -P)
 real_parent=$(cd -- "${source:h}" && /bin/pwd -P)
 if [[ "$real_destination" == "$real_parent" ]]; then
   print -r -- '已跳过：已经位于目标目录。'
-  exit 0
+  exit 100
 fi
 if [[ -d "$source" && ! -L "$source" ]]; then
   real_source=$(cd -- "$source" && /bin/pwd -P)

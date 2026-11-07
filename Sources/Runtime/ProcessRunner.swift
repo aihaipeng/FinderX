@@ -118,13 +118,16 @@ struct ProcessRunner {
         let signalled = status & 0x7f
         let code = signalled == 0 ? (status >> 8) & 0xff : 128 + signalled
         let success = signalled == 0 && job.successExitCodes.contains(code)
-        let resultStatus = forcedStatus ?? (success ? .succeeded : .failed)
+        let resultStatus = forcedStatus ?? (success ? .succeeded
+            : code == 130 ? .cancelled
+            : code == 100 ? .skipped
+            : .failed)
         let errorText = String(decoding: stderr, as: UTF8.self)
         return JobResult(targets: targets, status: resultStatus, exitCode: code,
             stdout: String(decoding: stdout, as: UTF8.self), stderr: errorText,
             stdoutTruncated: stdoutTruncated, stderrTruncated: stderrTruncated,
-            errorCode: resultStatus == .succeeded ? nil : resultStatus == .timedOut ? "process.timedOut" : resultStatus == .cancelled ? "process.cancelled" : "process.failed",
+            errorCode: resultStatus == .succeeded || resultStatus == .skipped ? nil : resultStatus == .timedOut ? "process.timedOut" : resultStatus == .cancelled ? "process.cancelled" : "process.failed",
             message: resultStatus == .succeeded ? (job.executable == "/usr/bin/open" ? "已提交打开请求。" : nil)
-                : resultStatus == .timedOut ? "命令执行超时。" : resultStatus == .cancelled ? "操作已取消。" : "退出码 \(code)：\(String(errorText.prefix(2048)))")
+                : resultStatus == .timedOut ? "命令执行超时。" : resultStatus == .cancelled ? "操作已取消。" : resultStatus == .skipped ? nil : "退出码 \(code)：\(String(errorText.prefix(2048)))")
     }
 }

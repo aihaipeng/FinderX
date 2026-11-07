@@ -40,7 +40,7 @@ enum MenuBuilder {
                                             unavailableReason: availability[id], children: []))
                 case .group:
                     let children = nodes(node.children ?? [])
-                    if !children.isEmpty {
+                    if !children.isEmpty || node.showWhenEmpty == true {
                         result.append(MenuModel(type: .group, title: node.title ?? "", icon: node.icon,
                                                 actionID: nil, unavailableReason: nil, children: children))
                     }

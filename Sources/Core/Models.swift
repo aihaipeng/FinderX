@@ -112,6 +112,7 @@ struct MenuDefinition: Codable {
     var icon: String? = nil
     var children: [MenuDefinition]? = nil
     var actionID: String? = nil
+    var showWhenEmpty: Bool? = nil
 }
 
 struct FrameworkConfiguration: Codable {
@@ -204,16 +205,39 @@ struct ExecutionResult: Codable {
     let finishedAt: Date
     let status: ResultStatus
     let jobs: [JobResult]
+    var requestedCount: Int? = nil
+
+    private func count(_ status: ResultStatus) -> Int {
+        jobs.reduce(0) { total, job in
+            guard job.status == status else { return total }
+            return total + max(1, job.targets.count)
+        }
+    }
 
     var summary: String {
-        let completed = jobs.filter { $0.status == .succeeded }.count
-        let skipped = jobs.filter { $0.status == .skipped }.count
-        let details = String(jobs.map { job in
-            [job.message, job.stdout.isEmpty ? nil : String(job.stdout.prefix(2048)),
-             job.message == nil && !job.stderr.isEmpty ? String(job.stderr.prefix(2048)) : nil]
+        let completed = count(.succeeded)
+        let skipped = count(.skipped)
+        let failed = count(.failed) + count(.timedOut)
+        let cancelled = count(.cancelled)
+        var counts = ["完成 \(completed)"]
+        if skipped > 0 { counts.append("跳过 \(skipped)") }
+        if failed > 0 { counts.append("失败 \(failed)") }
+        if cancelled > 0 { counts.append("取消 \(cancelled)") }
+        let processed = jobs.reduce(0) { $0 + max(1, $1.targets.count) }
+        let unprocessed = max(0, (requestedCount ?? processed) - processed)
+        if unprocessed > 0 { counts.append("未执行 \(unprocessed)") }
+        let raw = jobs.map { job -> String in
+            let targets = job.targets.map { ($0 as NSString).abbreviatingWithTildeInPath }
+                .joined(separator: "、")
+            let output = [job.message, job.stdout.isEmpty ? nil : String(job.stdout.prefix(2048)),
+                          job.message == nil && !job.stderr.isEmpty ? String(job.stderr.prefix(2048)) : nil]
                 .compactMap { $0 }.joined(separator: "\n")
-        }.filter { !$0.isEmpty }.joined(separator: "\n").prefix(8192))
-        return "\(title)：\(status.displayName)（任务完成 \(completed)，跳过 \(skipped)）" +
+            return [targets, output].filter { !$0.isEmpty }.joined(separator: "\n")
+        }.filter { !$0.isEmpty }.joined(separator: "\n")
+        let details = raw.count > 8192
+            ? String(raw.prefix(8192)) + "\n…（结果已截断）"
+            : raw
+        return "\(title)：\(status.displayName)（\(counts.joined(separator: "，"))）" +
             (details.isEmpty ? "" : "\n\(details)")
     }
 }

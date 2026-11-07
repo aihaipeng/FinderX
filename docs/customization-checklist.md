@@ -10,10 +10,12 @@
 - [x] 复制路径：`copy-paths.zsh`。
 - [x] 固定到程序坞：`pin-dock.zsh`。
 - [x] 移动到指定目录：`move.zsh`，每个目标目录对应一份动作绑定。
+- [x] 拷贝到任意目录：`copy-to.zsh`，一次选择目录后拷贝全部选中项；可自定义目标、命名和冲突策略。
 - [x] 发送到 LocalSend：`localsend.zsh`。
 - [x] 桌面快捷方式：`symlink.zsh`，实际创建符号链接。
 - [x] 旧版目标目录自动备份并迁移，动作 ID 在迁移后保持稳定。
 - [x] 动态生成 Finder 菜单，支持文件、目录、混合多选和空白处上下文。
+- [x] 默认菜单包含常驻的“打开方式”分组；未添加应用时显示禁用占位项。
 - [x] Finder 动作在后台唤醒主程序，不自动弹设置窗口或抢焦点；失败通过菜单栏状态和执行结果呈现。
 
 终端与 Dock 只适用于目录，其他文件动作默认允许文件与目录。条件不符时不显示，依赖缺失时禁用。
@@ -129,6 +131,9 @@
   config.json                   菜单与动作绑定
   config.last-good.json         最近有效配置
   config.json.legacy-backup     旧版目标目录备份（发生迁移时存在）
+  config.before-copy-to.json    拷贝到动作迁移前配置备份（发生迁移时存在）
+  config.copy-to-migrated       拷贝到动作迁移标记
+  config.open-with-migrated     打开方式分组迁移标记
   Scripts/                     用户实际运行和编辑的脚本
   availability.json            应用与脚本依赖状态
   Requests/                    等待主程序消费的临时请求

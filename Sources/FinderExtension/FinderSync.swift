@@ -47,12 +47,20 @@ final class FinderSync: FIFinderSync {
                 let submenu = NSMenu(title: node.title)
                 submenu.autoenablesItems = false
                 render(node.children, in: submenu, snapshot: snapshot, context: context)
+                if node.children.isEmpty {
+                    let placeholder = NSMenuItem(title: "暂无可用操作", action: nil, keyEquivalent: "")
+                    placeholder.isEnabled = false
+                    submenu.addItem(placeholder)
+                }
                 item.submenu = submenu
             } else if let id = node.actionID {
                 item.target = self
                 bindings.bind(item, actionID: id, revision: snapshot.revision, context: context)
                 item.isEnabled = node.unavailableReason == nil
                 item.toolTip = node.unavailableReason
+                if let reason = node.unavailableReason {
+                    item.title = "\(node.title)（\(DependencyAvailability.shortReason(reason))）"
+                }
             }
             menu.addItem(item)
         }
@@ -61,6 +69,7 @@ final class FinderSync: FIFinderSync {
     @objc private func invoke(_ sender: NSMenuItem) {
         guard let binding = bindings.resolve(sender) else {
             NSLog("FinderX missing menu binding for tag %ld", sender.tag)
+            recordSubmissionError("菜单操作已过期，请重新打开右键菜单。")
             return
         }
         do {
@@ -68,7 +77,15 @@ final class FinderSync: FIFinderSync {
             let url = try transport.enqueue(request)
             NSLog("FinderX queued action %@ request %@", request.actionID, request.requestID.uuidString)
             BackgroundLaunch.open(url)
-        } catch { NSLog("FinderX request failed: %@", error.localizedDescription) }
+            try? FileManager.default.removeItem(at: SharedConfig.submissionErrorURLForExtension)
+        } catch {
+            NSLog("FinderX request failed: %@", error.localizedDescription)
+            recordSubmissionError("未能启动操作：\(error.localizedDescription)。请打开 FinderX 检查。")
+        }
+    }
+
+    private func recordSubmissionError(_ message: String) {
+        try? message.write(to: SharedConfig.submissionErrorURLForExtension, atomically: true, encoding: .utf8)
     }
 
     private func settingsItem(_ title: String) -> NSMenuItem {
